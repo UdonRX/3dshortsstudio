@@ -259,8 +259,11 @@ export function createStudio(mount: HTMLElement, callbacks: StudioCallbacks): St
   let disposed = false;
   let pointerDown = false;
   let lastX = 0;
+  let lastY = 0;
   let targetYaw = 0;
   let currentYaw = 0;
+  let targetPitch = 0;
+  let currentPitch = 0;
   let frameCount = 0;
   let lastFpsTime = performance.now();
   const clock = new THREE.Clock();
@@ -279,12 +282,15 @@ export function createStudio(mount: HTMLElement, callbacks: StudioCallbacks): St
   const onPointerDown = (event: PointerEvent) => {
     pointerDown = true;
     lastX = event.clientX;
+    lastY = event.clientY;
     renderer.domElement.setPointerCapture?.(event.pointerId);
   };
   const onPointerMove = (event: PointerEvent) => {
     if (!pointerDown) return;
     targetYaw = THREE.MathUtils.clamp(targetYaw + (event.clientX - lastX) * 0.006, -0.72, 0.72);
+    targetPitch = THREE.MathUtils.clamp(targetPitch + (event.clientY - lastY) * 0.004, -0.42, 0.42);
     lastX = event.clientX;
+    lastY = event.clientY;
   };
   const onPointerUp = () => { pointerDown = false; };
   renderer.domElement.addEventListener('pointerdown', onPointerDown);
@@ -297,8 +303,10 @@ export function createStudio(mount: HTMLElement, callbacks: StudioCallbacks): St
     const delta = Math.min(clock.getDelta(), 0.05);
     const elapsed = clock.elapsedTime;
     currentYaw = THREE.MathUtils.lerp(currentYaw, targetYaw, 0.055);
+    currentPitch = THREE.MathUtils.lerp(currentPitch, targetPitch, 0.055);
     camera.position.x = cameraHome.x + currentYaw * 5.5;
-    camera.lookAt(Math.sin(currentYaw) * 1.8, 1.05, -1.8);
+    camera.position.y = cameraHome.y + currentPitch * 3.5;
+    camera.lookAt(Math.sin(currentYaw) * 1.8, 1.05 + currentPitch * 1.2, -1.8);
     character.animate(elapsed, playing);
     ambientParticles.position.y = Math.sin(elapsed * 0.35) * 0.12;
     renderer.render(scene, camera);
@@ -328,7 +336,7 @@ export function createStudio(mount: HTMLElement, callbacks: StudioCallbacks): St
       playing = !playing;
       return playing;
     },
-    resetCamera: () => { targetYaw = 0; },
+    resetCamera: () => { targetYaw = 0; targetPitch = 0; },
     dispose: () => {
       if (disposed) return;
       disposed = true;

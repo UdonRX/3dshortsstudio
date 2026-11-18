@@ -36,9 +36,9 @@ button { -webkit-tap-highlight-color: transparent; }
 .preview-head { height:43px; padding:0 14px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); color:#c4ced8; font-size:9px; font-weight:700; letter-spacing:.14em; }
 .preview-head > div { display:flex; align-items:center; gap:8px; }
 .ratio { color:#778596; font-size:8px; }
-.preview-frame { position:relative; width:100%; aspect-ratio:9/16; max-height: min(112vw, 660px); overflow:hidden; background:#101923; touch-action:pan-y; }
+.preview-frame { position:relative; width:100%; aspect-ratio:9/16; max-height: min(112vw, 660px); overflow:hidden; background:#101923; touch-action:none; overscroll-behavior:contain; user-select:none; -webkit-user-select:none; }
 .scene-mount { position:absolute; inset:0; }
-.scene-canvas { display:block; width:100%; height:100%; touch-action:pan-y; outline:none; }
+.scene-canvas { display:block; width:100%; height:100%; touch-action:none; overscroll-behavior:contain; user-select:none; -webkit-user-select:none; outline:none; }
 .scene-label { position:absolute; z-index:2; top:17px; left:16px; display:flex; flex-direction:column; gap:5px; pointer-events:none; text-shadow:0 2px 12px #0008; }
 .scene-label span { color:#d0dbe5; font-size:8px; letter-spacing:.2em; }
 .scene-label b { font-size:11px; letter-spacing:.16em; }

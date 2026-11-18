@@ -41,7 +41,7 @@ root.innerHTML = `
         </button>
         <div class="fps-readout"><b id="fps-value">--</b><span>FPS</span></div>
       </div>
-      <p class="gesture-hint">画面を左右にドラッグして、3Dシーンを見回せるよ</p>
+      <p class="gesture-hint">画面を上下左右にドラッグして、3Dシーンを見回せるよ</p>
     </section>
 
     <section class="status-grid" aria-label="動作状況">
