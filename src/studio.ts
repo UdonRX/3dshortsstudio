@@ -280,23 +280,54 @@ export function createStudio(mount: HTMLElement, callbacks: StudioCallbacks): St
   resize();
 
   const onPointerDown = (event: PointerEvent) => {
+    if (event.pointerType === 'touch') return;
     pointerDown = true;
     lastX = event.clientX;
     lastY = event.clientY;
     renderer.domElement.setPointerCapture?.(event.pointerId);
   };
   const onPointerMove = (event: PointerEvent) => {
-    if (!pointerDown) return;
+    if (!pointerDown || event.pointerType === 'touch') return;
     targetYaw = THREE.MathUtils.clamp(targetYaw + (event.clientX - lastX) * 0.006, -0.72, 0.72);
     targetPitch = THREE.MathUtils.clamp(targetPitch + (event.clientY - lastY) * 0.004, -0.42, 0.42);
     lastX = event.clientX;
     lastY = event.clientY;
   };
   const onPointerUp = () => { pointerDown = false; };
+
+  // Handle iPhone touch gestures directly on the 3D canvas. Prevent the
+  // browser's default page scrolling only for touches that start here.
+  const onTouchStart = (event: TouchEvent) => {
+    if (event.cancelable) event.preventDefault();
+    const touch = event.changedTouches[0];
+    if (!touch) return;
+    pointerDown = true;
+    lastX = touch.clientX;
+    lastY = touch.clientY;
+  };
+  const onTouchMove = (event: TouchEvent) => {
+    if (!pointerDown) return;
+    if (event.cancelable) event.preventDefault();
+    const touch = event.touches[0];
+    if (!touch) return;
+    targetYaw = THREE.MathUtils.clamp(targetYaw + (touch.clientX - lastX) * 0.006, -0.72, 0.72);
+    targetPitch = THREE.MathUtils.clamp(targetPitch + (touch.clientY - lastY) * 0.004, -0.42, 0.42);
+    lastX = touch.clientX;
+    lastY = touch.clientY;
+  };
+  const onTouchEnd = (event: TouchEvent) => {
+    if (event.cancelable) event.preventDefault();
+    pointerDown = false;
+  };
+
   renderer.domElement.addEventListener('pointerdown', onPointerDown);
   renderer.domElement.addEventListener('pointermove', onPointerMove);
   renderer.domElement.addEventListener('pointerup', onPointerUp);
   renderer.domElement.addEventListener('pointercancel', onPointerUp);
+  renderer.domElement.addEventListener('touchstart', onTouchStart, { passive: false });
+  renderer.domElement.addEventListener('touchmove', onTouchMove, { passive: false });
+  renderer.domElement.addEventListener('touchend', onTouchEnd, { passive: false });
+  renderer.domElement.addEventListener('touchcancel', onTouchEnd, { passive: false });
 
   const render = () => {
     if (disposed) return;
@@ -346,6 +377,10 @@ export function createStudio(mount: HTMLElement, callbacks: StudioCallbacks): St
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
       renderer.domElement.removeEventListener('pointercancel', onPointerUp);
+      renderer.domElement.removeEventListener('touchstart', onTouchStart);
+      renderer.domElement.removeEventListener('touchmove', onTouchMove);
+      renderer.domElement.removeEventListener('touchend', onTouchEnd);
+      renderer.domElement.removeEventListener('touchcancel', onTouchEnd);
       scene.traverse((object) => {
         if (object instanceof THREE.Mesh) {
           object.geometry.dispose();
