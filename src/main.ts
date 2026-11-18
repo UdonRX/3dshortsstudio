@@ -1,5 +1,6 @@
 import './style.css';
 import { createStudio } from './studio';
+import { mountEditor } from './editor';
 
 const root = document.querySelector<HTMLDivElement>('#app');
 if (!root) throw new Error('アプリの起動領域が見つかりません。');
@@ -11,7 +12,7 @@ root.innerHTML = `
         <span class="brand-mark"><span></span><span></span><span></span></span>
         <span>3D SHORTS <b>STUDIO</b></span>
       </a>
-      <div class="phase-pill"><i></i> PHASE 01</div>
+      <div class="phase-pill"><i></i> PHASE 02</div>
     </header>
 
     <section class="intro">
@@ -28,6 +29,7 @@ root.innerHTML = `
       <div class="preview-frame">
         <div class="scene-label"><span>SCENE 01</span><b>THE FIRST WALK</b></div>
         <div id="scene-mount" class="scene-mount"></div>
+        <div id="caption-preview" class="caption-overlay" hidden></div>
         <div class="preview-vignette"></div>
         <div class="preview-footer"><span>PROCEDURAL 3D</span><span id="render-state">準備中...</span></div>
         <div id="scene-error" class="scene-error" hidden></div>
@@ -43,6 +45,8 @@ root.innerHTML = `
       </div>
       <p class="gesture-hint">画面を上下左右にドラッグして、3Dシーンを見回せるよ</p>
     </section>
+
+    <section id="editor-root" class="editor-panel" aria-label="動画編集"></section>
 
     <section class="status-grid" aria-label="動作状況">
       <article class="status-card">
@@ -62,8 +66,8 @@ root.innerHTML = `
     <section class="next-section">
       <div class="section-heading"><div><span class="eyebrow">DEVELOPMENT ROADMAP</span><h2>制作機能を、順番に。</h2></div><span class="roadmap-count">01 / 06</span></div>
       <div class="roadmap">
-        <div class="roadmap-item active"><span class="step-number">01</span><div><b>3Dプレビュー基盤</b><small>iPhone表示・シーン描画・操作</small></div><span class="step-state">NOW</span></div>
-        <div class="roadmap-item"><span class="step-number">02</span><div><b>素材・キャラクター</b><small>モデル読み込み・素材ライブラリ</small></div><span class="step-state">NEXT</span></div>
+        <div class="roadmap-item"><span class="step-number">01</span><div><b>3Dプレビュー基盤</b><small>iPhone表示・シーン描画・操作</small></div><span class="step-state">DONE</span></div>
+        <div class="roadmap-item active"><span class="step-number">02</span><div><b>動画制作基盤</b><small>編集・素材管理・MP4書き出し</small></div><span class="step-state">NOW</span></div>
         <div class="roadmap-item"><span class="step-number">03</span><div><b>AIシナリオ生成</b><small>プロンプトからシーン設計</small></div><span class="step-state">LATER</span></div>
         <div class="roadmap-item"><span class="step-number">04</span><div><b>アニメーション・演出</b><small>動き・カメラ・エフェクト</small></div><span class="step-state">LATER</span></div>
         <div class="roadmap-item"><span class="step-number">05</span><div><b>音声・字幕</b><small>ナレーション・BGM・テロップ</small></div><span class="step-state">LATER</span></div>
@@ -98,6 +102,9 @@ try {
     }
   });
 
+  const editorRoot = document.querySelector<HTMLElement>('#editor-root');
+  const disposeEditor = editorRoot ? mountEditor(editorRoot, studio) : () => undefined;
+
   playButton.addEventListener('click', () => {
     const playing = studio.togglePlayback();
     playButton.innerHTML = playing
@@ -106,7 +113,7 @@ try {
   });
   resetButton.addEventListener('click', () => studio.resetCamera());
 
-  window.addEventListener('pagehide', () => studio.dispose(), { once: true });
+  window.addEventListener('pagehide', () => { disposeEditor(); studio.dispose(); }, { once: true });
 } catch (cause) {
   const message = cause instanceof Error ? cause.message : '3Dエンジンを起動できませんでした。';
   status.textContent = '起動失敗';

@@ -22,7 +22,7 @@ iPhoneだけで3Dショート動画を制作するためのPWAプロジェクト
 
 詳細と完了条件は [開発ロードマップ](docs/ROADMAP.md) を参照。
 
-## Phase 1の内容
+## Phase 2 実装状況\n\nPhase 2の初期実装を開始。現時点では編集UI・タイムライン制御・シーンプリセット・字幕プレビュー/録画合成・映像エフェクト・GLB/glTF読み込み・IndexedDB保存・MP4対応判定付き録画を実装対象とする。iPhone実機で30秒のMP4保存まで確認できるまではPhase 2完了とはしない。\n\n## Phase 1の内容
 
 - Vite + TypeScript + Three.js
 - iPhone Safari向け縦型9:16プレビュー

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 type StudioCallbacks = {
   onReady: () => void;
@@ -10,6 +11,13 @@ export type StudioController = {
   togglePlayback: () => boolean;
   resetCamera: () => void;
   dispose: () => void;
+  setTimelineTime: (seconds: number) => void;
+  getTimelineTime: () => number;
+  setPlaying: (playing: boolean) => void;
+  setScene: (index: number) => void;
+  setEffect: (effect: string) => void;
+  loadModel: (file: File) => Promise<void>;
+  clearImportedModels: () => void;
 };
 
 function makeMaterial(color: THREE.ColorRepresentation, roughness = 0.82): THREE.MeshStandardMaterial {
@@ -256,7 +264,11 @@ export function createStudio(mount: HTMLElement, callbacks: StudioCallbacks): St
   scene.add(ambientParticles);
 
   let playing = true;
+  let timelineTime = 0;
   let disposed = false;
+  const importedModels = new THREE.Group();
+  world.add(importedModels);
+  const gltfLoader = new GLTFLoader();
   let pointerDown = false;
   let lastX = 0;
   let lastY = 0;
@@ -332,7 +344,8 @@ export function createStudio(mount: HTMLElement, callbacks: StudioCallbacks): St
   const render = () => {
     if (disposed) return;
     const delta = Math.min(clock.getDelta(), 0.05);
-    const elapsed = clock.elapsedTime;
+    if (playing) timelineTime = Math.min(30, timelineTime + delta);
+    const elapsed = timelineTime;
     currentYaw = THREE.MathUtils.lerp(currentYaw, targetYaw, 0.055);
     currentPitch = THREE.MathUtils.lerp(currentPitch, targetPitch, 0.055);
     camera.position.x = cameraHome.x + currentYaw * 5.5;
@@ -366,6 +379,56 @@ export function createStudio(mount: HTMLElement, callbacks: StudioCallbacks): St
     togglePlayback: () => {
       playing = !playing;
       return playing;
+    },
+    setTimelineTime: (seconds: number) => { timelineTime = THREE.MathUtils.clamp(seconds, 0, 30); },
+    getTimelineTime: () => timelineTime,
+    setPlaying: (value: boolean) => { playing = value; },
+    setScene: (index: number) => {
+      const presets = [
+        { camera: [4.5, 3.1, 7.6] as [number, number, number], color: '#101923' },
+        { camera: [-5.8, 2.8, 5.2] as [number, number, number], color: '#19202c' },
+        { camera: [0.5, 5.2, 9.5] as [number, number, number], color: '#20202a' }
+      ];
+      const preset = presets[((index % presets.length) + presets.length) % presets.length];
+      cameraHome.set(...preset.camera);
+      scene.background = new THREE.Color(preset.color);
+      scene.fog = new THREE.Fog(preset.color, 12, 34);
+      targetYaw = 0; targetPitch = 0;
+    },
+    setEffect: (effect: string) => {
+      const exposures: Record<string, number> = { none: 1.15, warm: 1.38, cool: 0.98, noir: 0.82, dreamy: 1.55 };
+      renderer.toneMappingExposure = exposures[effect] ?? 1.15;
+      const colors: Record<string, string> = { none: '#101923', warm: '#211b18', cool: '#101b28', noir: '#090b10', dreamy: '#252034' };
+      scene.background = new THREE.Color(colors[effect] ?? colors.none);
+      scene.fog = new THREE.Fog(colors[effect] ?? colors.none, 12, 34);
+    },
+    loadModel: async (file: File) => {
+      const data = await file.arrayBuffer();
+      const gltf = await new Promise<{ scene: THREE.Group }>((resolve, reject) => {
+        gltfLoader.parse(data, '', (value) => resolve(value), (error) => reject(error));
+      });
+      const model = gltf.scene;
+      const bounds = new THREE.Box3().setFromObject(model);
+      const size = bounds.getSize(new THREE.Vector3());
+      const maxDimension = Math.max(size.x, size.y, size.z) || 1;
+      model.scale.setScalar(2.2 / maxDimension);
+      const scaledBounds = new THREE.Box3().setFromObject(model);
+      model.position.y -= scaledBounds.min.y;
+      model.position.x = (importedModels.children.length % 3 - 1) * 1.1;
+      model.position.z = 0.8;
+      importedModels.add(model);
+    },
+    clearImportedModels: () => {
+      for (const child of [...importedModels.children]) {
+        importedModels.remove(child);
+        child.traverse((object) => {
+          if (object instanceof THREE.Mesh) {
+            object.geometry.dispose();
+            const materials = Array.isArray(object.material) ? object.material : [object.material];
+            materials.forEach((material) => material.dispose());
+          }
+        });
+      }
     },
     resetCamera: () => { targetYaw = 0; targetPitch = 0; },
     dispose: () => {
