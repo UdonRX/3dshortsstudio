@@ -1,5 +1,10 @@
 import type { StudioController } from './studio';
 import JSZip from 'jszip';
+type AssetKind='character'|'hair'|'face'|'clothing'|'prop'|'building'|'nature'|'texture'|'other';
+type ZipAsset={path:string;name:string;kind:AssetKind;selected:boolean;loaded:boolean;zipPath:string;isModel:boolean};
+const categoryLabel:Record<AssetKind,string>={character:'キャラクター',hair:'髪',face:'顔',clothing:'服・装備',prop:'小物',building:'建物',nature:'自然',texture:'テクスチャ',other:'未分類'};
+function classifyAsset(path:string):AssetKind{const s=path.toLowerCase();if(/\.(png|jpe?g|webp|bmp|tga)$/i.test(s))return'texture';if(/hair|hairstyle|髪/.test(s))return'hair';if(/face|head|skin|顔/.test(s))return'face';if(/cloth|shirt|pants|dress|armor|outfit|衣装|服/.test(s))return'clothing';if(/character|female|male|body|humanoid|person|全身/.test(s))return'character';if(/weapon|accessory|prop|item|gun|sword|bag|小物|装備/.test(s))return'prop';if(/building|house|architecture|建物/.test(s))return'building';if(/tree|plant|grass|flower|nature|自然/.test(s))return'nature';return'other';}
+
 
 type ProjectData = {
   version: 1;
@@ -77,7 +82,7 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
       <div class="editor-label"><b>3D ASSET LIBRARY</b><span>GLB / glTF</span></div>
       <label class="upload-button" for="model-file">＋ 3Dモデルを読み込む</label>
       <input id="model-file" type="file" accept=".glb,.gltf,.zip,model/gltf-binary,model/gltf+json,application/zip" hidden>
-      <p id="asset-status" class="field-note">ZIP / GLB / glTFを読み込み、素材ライブラリに保存するよ。</p><div id="asset-library" class="asset-library"></div><div class="asset-tools"><label class="asset-label">カテゴリ<select id="asset-category" class="asset-select"><option value="character">キャラクター</option><option value="building">建物</option><option value="prop">小物</option><option value="nature">自然</option><option value="other">その他</option></select></label><label class="asset-label">大きさ<input id="asset-scale" type="range" min="0.1" max="5" step="0.1" value="1"></label><div class="asset-transform"><label>位置 X<input id="asset-x" type="range" min="-5" max="5" step="0.1" value="0"></label><label>位置 Y<input id="asset-y" type="range" min="0" max="5" step="0.1" value="0"></label><label>位置 Z<input id="asset-z" type="range" min="-10" max="10" step="0.1" value="0"></label></div><div class="asset-transform"><label>回転 Y<input id="asset-rotation" type="range" min="-180" max="180" step="5" value="0"></label></div><div class="asset-animation"><label>アニメーション<select id="asset-animation" class="asset-select"><option value="-1">なし</option></select></label><button id="asset-anim-play" class="action-button" type="button">アニメーション再生</button></div></div><button id="clear-models" class="text-button" type="button">読み込んだモデルをすべて外す</button>
+      <p id="asset-status" class="field-note">ZIPをカタログ化し必要なモデルだけ読み込めるよ。</p><div id="zip-catalog" class="zip-catalog"></div><div class="zip-import-controls"><button id="zip-load-selected" class="action-button accent" type="button">選択素材を読み込む</button><button id="zip-cancel" class="action-button" type="button">読み込み中止</button></div><div id="asset-library" class="asset-library"></div><div class="asset-tools"><label class="asset-label">カテゴリ<select id="asset-category" class="asset-select"><option value="character">キャラクター</option><option value="building">建物</option><option value="prop">小物</option><option value="nature">自然</option><option value="other">その他</option></select></label><label class="asset-label">大きさ<input id="asset-scale" type="range" min="0.1" max="5" step="0.1" value="1"></label><div class="asset-transform"><label>位置 X<input id="asset-x" type="range" min="-5" max="5" step="0.1" value="0"></label><label>位置 Y<input id="asset-y" type="range" min="0" max="5" step="0.1" value="0"></label><label>位置 Z<input id="asset-z" type="range" min="-10" max="10" step="0.1" value="0"></label></div><div class="asset-transform"><label>回転 Y<input id="asset-rotation" type="range" min="-180" max="180" step="5" value="0"></label></div><div class="asset-animation"><label>アニメーション<select id="asset-animation" class="asset-select"><option value="-1">なし</option></select></label><button id="asset-anim-play" class="action-button" type="button">アニメーション再生</button></div></div><button id="clear-models" class="text-button" type="button">読み込んだモデルをすべて外す</button>
     </div>
     <div class="editor-footer">
       <button id="save-project" class="action-button" type="button">プロジェクトを保存</button>
@@ -99,6 +104,9 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
   let exportFrame = 0;
   let modelFiles: { name: string; data: ArrayBuffer; resources?: { path: string; blob: Blob }[]; category?: string; position?: [number,number,number]; rotation?: [number,number,number]; scale?: number }[] = [];
   let selectedModel=-1, animationPlaying=false;
+  let zipArchive:JSZip|null=null;
+  let zipCatalog:ZipAsset[]=[];
+  let importCancelled=false;
   const assetLibrary=$('#asset-library'), categoryInput=$('#asset-category') as HTMLSelectElement;
   const transformInputs=['#asset-x','#asset-y','#asset-z','#asset-rotation','#asset-scale'].map(s=>$(s) as HTMLInputElement);
 
@@ -137,6 +145,9 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
       root.querySelectorAll('[data-effect]').forEach((item) => item.classList.toggle('active', item === button));
     });
   });
+  const renderCatalog=()=>{const host=$('#zip-catalog');host.innerHTML='';if(!zipCatalog.length)return;const summary=document.createElement('p');summary.className='zip-summary';summary.textContent='モデル '+zipCatalog.filter(a=>a.isModel).length+'件 / 画像 '+zipCatalog.filter(a=>a.kind==='texture').length+'件';host.append(summary);const filter=document.createElement('select');filter.className='asset-select';filter.innerHTML='<option value="all">全素材</option>'+Object.entries(categoryLabel).map(([k,v])=>'<option value="'+k+'">'+v+'</option>').join('');host.append(filter);const list=document.createElement('div');list.className='zip-catalog-list';const draw=()=>{list.innerHTML='';zipCatalog.filter(a=>filter.value==='all'||a.kind===filter.value).forEach(a=>{const row=document.createElement('label');row.className='zip-entry';const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.checked=a.selected;checkbox.disabled=!a.isModel||a.loaded;checkbox.addEventListener('change',()=>a.selected=checkbox.checked);const name=document.createElement('span');name.textContent=a.name;name.className='zip-entry-name';const tag=document.createElement('small');tag.textContent=categoryLabel[a.kind]+(a.loaded?' · 読込済':'');row.append(checkbox,name,tag);list.append(row);});};filter.addEventListener('change',draw);draw();host.append(list);};
+  $('#zip-cancel').addEventListener('click',()=>{importCancelled=true;$('#asset-status').textContent='中止要求を受け付けたよ。';});
+  $('#zip-load-selected').addEventListener('click',async()=>{if(!zipArchive)return;const picked=zipCatalog.filter(a=>a.isModel&&a.selected&&!a.loaded);if(!picked.length){message.textContent='読み込むモデルを選択してね。';return;}importCancelled=false;const btn=$('#zip-load-selected') as HTMLButtonElement;btn.disabled=true;let success=0,fail=0;const all=Object.values(zipArchive.files);for(let n=0;n<picked.length;n++){if(importCancelled)break;const asset=picked[n];$('#asset-status').textContent='読み込み '+(n+1)+' / '+picked.length+'：'+asset.name;try{const bytes=await zipArchive.file(asset.zipPath)!.async('arraybuffer');const modelFile=new File([bytes],asset.name,{type:asset.name.toLowerCase().endsWith('.glb')?'model/gltf-binary':'model/gltf+json'});const folder=asset.zipPath.includes('/')?asset.zipPath.slice(0,asset.zipPath.lastIndexOf('/')+1):'';let refs:string[]=[];if(asset.zipPath.toLowerCase().endsWith('.gltf')){const json=JSON.parse(new TextDecoder().decode(bytes));refs=(json.buffers||[]).concat(json.images||[]).map((x:any)=>x.uri).filter((x:string)=>x&&!x.startsWith('data:'));}const paths=refs.length?refs.map(p=>folder+p):all.filter(x=>folder&&x.name.startsWith(folder)&&/\.(png|jpe?g|webp|bin|ktx2)$/i.test(x.name)).map(x=>x.name);const resources=new Map<string,Blob>(),savedResources:{path:string;blob:Blob}[]=[];for(const path of paths){const blob=await zipArchive.file(path)?.async('blob');if(blob){resources.set(path,blob);resources.set(path.slice(folder.length),blob);resources.set(path.split('/').pop()!,blob);savedResources.push({path,blob});}}const cat=asset.kind==='character'?'character':asset.kind==='building'?'building':asset.kind==='nature'?'nature':asset.kind==='prop'?'prop':'other';await studio.loadModel(modelFile,resources.size?resources:undefined,cat);modelFiles.push({name:modelFile.name,data:bytes,resources:savedResources,category:cat,position:[0,0,0],rotation:[0,0,0],scale:1});asset.loaded=true;success++;renderLibrary();}catch(err){fail++;message.textContent='読み込み失敗 '+asset.name+'：'+(err instanceof Error?err.message:'');}renderCatalog();}selectedModel=modelFiles.length?modelFiles.length-1:-1;selectAsset(selectedModel);btn.disabled=false;$('#asset-status').textContent=(importCancelled?'中止':'完了')+'：成功 '+success+' / 失敗 '+fail;});
   const renderLibrary=()=>{assetLibrary.innerHTML='';modelFiles.forEach((m,i)=>{const row=document.createElement('div');row.className='asset-row'+(i===selectedModel?' selected':'');row.innerHTML='<button class="asset-select-row"><b></b><small></small></button><button class="asset-remove">×</button>';row.querySelector('b')!.textContent=m.name;row.querySelector('small')!.textContent=({character:'キャラクター',building:'建物',prop:'小物',nature:'自然',other:'その他'} as Record<string,string>)[m.category??'other'];row.querySelector('.asset-select-row')!.addEventListener('click',()=>selectAsset(i));row.querySelector('.asset-remove')!.addEventListener('click',()=>{studio.removeModel(i);modelFiles.splice(i,1);selectedModel=modelFiles.length?Math.min(i,modelFiles.length-1):-1;renderLibrary();selectAsset(selectedModel);});assetLibrary.append(row);});};
   const selectAsset=(i:number)=>{selectedModel=i;renderLibrary();const m=modelFiles[i];transformInputs.forEach(x=>x.disabled=!m);if(!m){($('#asset-animation') as HTMLSelectElement).innerHTML='<option value="-1">なし</option>';return;}categoryInput.value=m.category??'other';const p=m.position??[0,0,0],r=m.rotation??[0,0,0],scale=m.scale??1;[p[0],p[1],p[2],r[1]*180/Math.PI,scale].forEach((v,j)=>transformInputs[j].value=String(v));const sel=$('#asset-animation') as HTMLSelectElement;sel.innerHTML='<option value="-1">なし</option>';studio.getModelAnimations(i).forEach((name,j)=>{const o=document.createElement('option');o.value=String(j);o.textContent=name;sel.append(o);});};
   const applyTransform=()=>{if(selectedModel<0)return;const m=modelFiles[selectedModel];m.position=[+transformInputs[0].value,+transformInputs[1].value,+transformInputs[2].value];m.rotation=[0,+transformInputs[3].value*Math.PI/180,0];m.scale=+transformInputs[4].value;studio.setModelTransform(selectedModel,m.position,m.rotation,m.scale);};
@@ -150,72 +161,18 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
     const category = categoryInput.value;
     try {
       if (file.name.toLowerCase().endsWith('.zip')) {
-        $('#asset-status').textContent = 'ZIPを解析中...';
-        message.textContent = 'ZIP内のモデルを検索しているよ。';
-        const zip = await JSZip.loadAsync(file, { checkCRC32: true });
-        const entries = Object.values(zip.files).filter(item => !item.dir && !item.name.startsWith('__MACOSX/') && !item.name.split('/').pop()?.startsWith('.'));
-        const modelEntries = entries.filter(item => /\.(glb|gltf)$/i.test(item.name));
-        if (!modelEntries.length) throw new Error('ZIP内にGLB/glTFモデルが見つからなかったよ。');
-        const resourceBlobs = new Map<string, Blob>();
-        const storedResources: { path: string; blob: Blob }[] = [];
-        for (const entry of entries) {
-          if (/\.(glb|gltf)$/i.test(entry.name)) continue;
-          const blob = await entry.async('blob');
-          storedResources.push({ path: entry.name, blob });
-          resourceBlobs.set(entry.name, blob);
-          const tail = entry.name.split('/').pop();
-          if (tail) resourceBlobs.set(tail, blob);
-        }
-        const total = modelEntries.length;
-        let completed = 0;
-        let failures: string[] = [];
-        const added: string[] = [];
-        for (const entry of modelEntries) {
-          const name = entry.name.split('/').pop() || entry.name;
-          $('#asset-status').textContent = 'ZIP内モデル読み込み中 ' + (completed + 1) + ' / ' + total;
-          try {
-            const bytes = await entry.async('arraybuffer');
-            const modelFile = new File([bytes], name, { type: name.toLowerCase().endsWith('.glb') ? 'model/gltf-binary' : 'model/gltf+json' });
-            const modelResources = new Map<string, Blob>();
-            const folder = entry.name.includes('/') ? entry.name.slice(0, entry.name.lastIndexOf('/') + 1) : '';
-            // Resolve external glTF resources from the model's own directory first,
-            // avoiding same-name textures from unrelated folders in large ZIP packs.
-            const related = entries.filter(resourceEntry =>
-              !/\.(glb|gltf)$/i.test(resourceEntry.name) &&
-              folder && resourceEntry.name.startsWith(folder)
-            );
-            for (const resourceEntry of related) {
-              const blob = resourceBlobs.get(resourceEntry.name);
-              if (!blob) continue;
-              modelResources.set(resourceEntry.name, blob);
-              const relative = resourceEntry.name.slice(folder.length);
-              modelResources.set(relative, blob);
-              const tail = relative.split('/').pop();
-              if (tail) modelResources.set(tail, blob);
-            }
-            // Fallback resources outside the model folder only when their basename
-            // hasn't already been resolved locally.
-            for (const resourceEntry of entries) {
-              if (/\.(glb|gltf)$/i.test(resourceEntry.name)) continue;
-              const blob = resourceBlobs.get(resourceEntry.name);
-              if (!blob) continue;
-              const tail = resourceEntry.name.split('/').pop();
-              if (tail && !modelResources.has(tail)) modelResources.set(tail, blob);
-            }
-            await studio.loadModel(modelFile, modelResources, category);
-            modelFiles.push({ name: modelFile.name, data: bytes, resources: storedResources, category, position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 });
-            added.push(name);
-          } catch (error) {
-            failures.push(name + (error instanceof Error ? ' (' + error.message + ')' : ''));
-          }
-          completed++;
-        }
-        selectedModel = modelFiles.length ? modelFiles.length - 1 : -1;
-        renderLibrary();
-        selectAsset(selectedModel);
-        $('#asset-status').textContent = 'ZIP読込完了：' + added.length + '件成功 / ' + failures.length + '件失敗';
-        message.textContent = failures.length ? 'ZIP内' + total + '件中' + added.length + '件を追加。失敗したモデル：' + failures.join('、') : 'ZIP内の' + added.length + 'モデルをすべて素材ライブラリに追加したよ。';
-      } else {
+        $('#asset-status').textContent='ZIPをカタログ化中...';
+        if(file.size>500*1024*1024)throw new Error('ZIPが500MBを超えているため停止したよ。');
+        const zip=await JSZip.loadAsync(file,{checkCRC32:false});
+        const entries=Object.values(zip.files).filter(a=>!a.dir&&!a.name.startsWith('__MACOSX/')&&!a.name.split('/').pop()?.startsWith('.'));
+        const models=entries.filter(a=>/\.(glb|gltf)$/i.test(a.name));
+        if(!models.length)throw new Error('ZIP内にGLB/glTFモデルが見つからなかったよ。');
+        zipArchive=zip;
+        zipCatalog=entries.map(a=>{const name=a.name.split('/').pop()||a.name;const isModel=/\.(glb|gltf)$/i.test(a.name);const kind=classifyAsset(a.name);return{path:a.name,name,kind,selected:isModel&&['character','building','nature','prop'].includes(kind),loaded:false,zipPath:a.name,isModel};});
+        renderCatalog();
+        $('#asset-status').textContent='ZIPカタログ作成完了：モデル '+models.length+'件。';
+        message.textContent='必要なモデルを選んで読み込んでね。';
+      }      } else {
         const bytes = await file.arrayBuffer();
         await studio.loadModel(file, undefined, category);
         modelFiles.push({ name: file.name, data: bytes, category, position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 });
