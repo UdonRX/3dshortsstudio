@@ -7,7 +7,7 @@ type ProjectData = {
   caption: string;
   effect: string;
   scene: number;
-  models: { name: string; data: ArrayBuffer; category?: string; position?: [number,number,number]; rotation?: [number,number,number]; scale?: number }[];
+  models: { name: string; data: ArrayBuffer; resources?: { path: string; blob: Blob }[]; category?: string; position?: [number,number,number]; rotation?: [number,number,number]; scale?: number }[];
 };
 
 const DB_NAME = '3d-shorts-studio';
@@ -97,7 +97,7 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
   let playing = true;
   let disposed = false;
   let exportFrame = 0;
-  let modelFiles: { name: string; data: ArrayBuffer; category?: string; position?: [number,number,number]; rotation?: [number,number,number]; scale?: number }[] = [];
+  let modelFiles: { name: string; data: ArrayBuffer; resources?: { path: string; blob: Blob }[]; category?: string; position?: [number,number,number]; rotation?: [number,number,number]; scale?: number }[] = [];
   let selectedModel=-1, animationPlaying=false;
   const assetLibrary=$('#asset-library'), categoryInput=$('#asset-category') as HTMLSelectElement;
   const transformInputs=['#asset-x','#asset-y','#asset-z','#asset-rotation','#asset-scale'].map(s=>$(s) as HTMLInputElement);
@@ -143,7 +143,77 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
   transformInputs.forEach(x=>x.addEventListener('input',applyTransform));categoryInput.addEventListener('change',()=>{if(selectedModel>=0){modelFiles[selectedModel].category=categoryInput.value;renderLibrary();}});
   $('#asset-animation').addEventListener('change',()=>{if(selectedModel>=0)studio.setModelAnimation(selectedModel,+($('#asset-animation') as HTMLSelectElement).value);});
   $('#asset-anim-play').addEventListener('click',()=>{if(selectedModel<0)return;animationPlaying=!animationPlaying;studio.setModelAnimationPlaying(selectedModel,animationPlaying);$('#asset-anim-play').textContent=animationPlaying?'アニメーション停止':'アニメーション再生';});
-  $('#model-file').addEventListener('change',async event=>{const input=event.currentTarget as HTMLInputElement,file=input.files?.[0];if(!file)return;try{let modelFile=file,resources:Map<string,Blob>|undefined;if(file.name.toLowerCase().endsWith('.zip')){const zip=await JSZip.loadAsync(file);const entries=Object.values(zip.files).filter(x=>!x.dir);const entry=entries.find(x=>x.name.toLowerCase().endsWith('.glb'))??entries.find(x=>x.name.toLowerCase().endsWith('.gltf'));if(!entry)throw new Error('ZIP内にGLB/glTFがないよ');modelFile=new File([await entry.async('arraybuffer')],entry.name.split('/').pop()??entry.name);resources=new Map();for(const item of entries){if(item===entry)continue;const blob=await item.async('blob');resources.set(item.name,blob);resources.set(item.name.split('/').pop()!,blob);}}const category=categoryInput.value;await studio.loadModel(modelFile,resources,category);modelFiles.push({name:modelFile.name,data:await modelFile.arrayBuffer(),category,position:[0,0,0],rotation:[0,0,0],scale:1});selectedModel=modelFiles.length-1;renderLibrary();selectAsset(selectedModel);$('#asset-status').textContent='素材登録：'+modelFile.name;message.textContent='モデルを素材ライブラリに追加したよ。';}catch(err){message.textContent=err instanceof Error?'読み込み失敗：'+err.message:'読み込み失敗';}input.value='';});
+  $('#model-file').addEventListener('change', async event => {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    const category = categoryInput.value;
+    try {
+      if (file.name.toLowerCase().endsWith('.zip')) {
+        $('#asset-status').textContent = 'ZIPを解析中...';
+        message.textContent = 'ZIP内のモデルを検索しているよ。';
+        const zip = await JSZip.loadAsync(file, { checkCRC32: true });
+        const entries = Object.values(zip.files).filter(item => !item.dir && !item.name.startsWith('__MACOSX/') && !item.name.split('/').pop()?.startsWith('.'));
+        const modelEntries = entries.filter(item => /\\.(glb|gltf)$/i.test(item.name));
+        if (!modelEntries.length) throw new Error('ZIP内にGLB/glTFモデルが見つからなかったよ。');
+        const resourceBlobs = new Map<string, Blob>();
+        const storedResources: { path: string; blob: Blob }[] = [];
+        for (const entry of entries) {
+          if (/\\.(glb|gltf)$/i.test(entry.name)) continue;
+          const blob = await entry.async('blob');
+          storedResources.push({ path: entry.name, blob });
+          resourceBlobs.set(entry.name, blob);
+          const tail = entry.name.split('/').pop();
+          if (tail) resourceBlobs.set(tail, blob);
+        }
+        const total = modelEntries.length;
+        let completed = 0;
+        let failures: string[] = [];
+        const added: string[] = [];
+        for (const entry of modelEntries) {
+          const name = entry.name.split('/').pop() || entry.name;
+          $('#asset-status').textContent = 'ZIP内モデル読み込み中 ' + (completed + 1) + ' / ' + total;
+          try {
+            const bytes = await entry.async('arraybuffer');
+            const modelFile = new File([bytes], name, { type: name.toLowerCase().endsWith('.glb') ? 'model/gltf-binary' : 'model/gltf+json' });
+            const modelResources = new Map<string, Blob>();
+            const folder = entry.name.includes('/') ? entry.name.slice(0, entry.name.lastIndexOf('/') + 1) : '';
+            for (const resourceEntry of entries) {
+              if (/\\.(glb|gltf)$/i.test(resourceEntry.name)) continue;
+              const blob = resourceBlobs.get(resourceEntry.name);
+              if (!blob) continue;
+              modelResources.set(resourceEntry.name, blob);
+              const tail = resourceEntry.name.split('/').pop();
+              if (tail) modelResources.set(tail, blob);
+              if (folder && resourceEntry.name.startsWith(folder)) modelResources.set(resourceEntry.name.slice(folder.length), blob);
+            }
+            await studio.loadModel(modelFile, modelResources, category);
+            modelFiles.push({ name: modelFile.name, data: bytes, resources: storedResources, category, position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 });
+            added.push(name);
+          } catch (error) {
+            failures.push(name + (error instanceof Error ? ' (' + error.message + ')' : ''));
+          }
+          completed++;
+        }
+        selectedModel = modelFiles.length ? modelFiles.length - 1 : -1;
+        renderLibrary();
+        selectAsset(selectedModel);
+        $('#asset-status').textContent = 'ZIP読込完了：' + added.length + '件成功 / ' + failures.length + '件失敗';
+        message.textContent = failures.length ? 'ZIP内' + total + '件中' + added.length + '件を追加。失敗したモデル：' + failures.join('、') : 'ZIP内の' + added.length + 'モデルをすべて素材ライブラリに追加したよ。';
+      } else {
+        const bytes = await file.arrayBuffer();
+        await studio.loadModel(file, undefined, category);
+        modelFiles.push({ name: file.name, data: bytes, category, position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 });
+        selectedModel = modelFiles.length - 1;
+        renderLibrary(); selectAsset(selectedModel);
+        $('#asset-status').textContent = '素材登録：' + file.name;
+        message.textContent = 'モデルを素材ライブラリに追加したよ。';
+      }
+    } catch (err) {
+      $('#asset-status').textContent = 'ZIP / モデルの読み込みに失敗';
+      message.textContent = err instanceof Error ? '読み込み失敗：' + err.message : '読み込み失敗';
+    } finally { input.value = ''; }
+  });
   $('#clear-models').addEventListener('click', () => {
     studio.clearImportedModels(); modelFiles = [];
     $('#asset-status').textContent = '読み込んだモデルはありません。';
@@ -168,7 +238,13 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
     root.querySelectorAll<HTMLButtonElement>('[data-effect]').forEach((item) => item.classList.toggle('active', item.dataset.effect === currentEffect));
     for (const model of saved.models ?? []) {
       try {
-        await studio.loadModel(new File([model.data], model.name));
+        const resources = new Map<string, Blob>();
+        for (const resource of model.resources ?? []) {
+          resources.set(resource.path, resource.blob);
+          const tail = resource.path.split('/').pop();
+          if (tail) resources.set(tail, resource.blob);
+        }
+        await studio.loadModel(new File([model.data], model.name), resources.size ? resources : undefined, model.category ?? 'other');
         modelFiles.push(model);
       } catch { /* Keep the rest of the project usable if one asset is invalid. */ }
     }
