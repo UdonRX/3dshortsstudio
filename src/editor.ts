@@ -165,7 +165,7 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
     try {
       if (file.name.toLowerCase().endsWith('.zip')) {
         $('#asset-status').textContent='ZIPをカタログ化中...';
-        if(file.size>500*1024*1024)throw new Error('ZIPが500MBを超えているため停止したよ。');
+        if(file.size>200*1024*1024)throw new Error('ZIPが200MBを超えているため、iPhoneのメモリ保護のため停止したよ。200MB以下に分割して読み込んでね。');
         const zip=await JSZip.loadAsync(file,{checkCRC32:false});
         const entries=Object.values(zip.files).filter(a=>!a.dir&&!a.name.startsWith('__MACOSX/')&&!a.name.split('/').pop()?.startsWith('.'));
         const models=entries.filter(a=>/\.(glb|gltf)$/i.test(a.name));
