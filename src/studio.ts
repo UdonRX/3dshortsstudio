@@ -15,6 +15,7 @@ export type StudioController = {
   getTimelineTime: () => number;
   setPlaying: (playing: boolean) => void;
   setScene: (index: number) => void;
+  setModelScene:(index:number,sceneIndex:number)=>void;
   setEffect: (effect: string) => void;
   loadModel: (file: File, resources?: Map<string,Blob>, category?: string) => Promise<void>;
   setModelVisible:(index:number,visible:boolean)=>void;
@@ -272,7 +273,8 @@ export function createStudio(mount: HTMLElement, callbacks: StudioCallbacks): St
   let disposed = false;
   const importedModels = new THREE.Group();
   world.add(importedModels);
-  const modelRecords:{root:THREE.Group;mixer?:THREE.AnimationMixer;clips:THREE.AnimationClip[];action?:THREE.AnimationAction}[]=[];
+  let activeSceneIndex=0;
+  const modelRecords:{root:THREE.Group;mixer?:THREE.AnimationMixer;clips:THREE.AnimationClip[];action?:THREE.AnimationAction;sceneIndex:number;userVisible:boolean}[]=[];
   let pointerDown = false;
   let lastX = 0;
   let lastY = 0;
@@ -394,6 +396,8 @@ export function createStudio(mount: HTMLElement, callbacks: StudioCallbacks): St
         { camera: [-5.8, 2.8, 5.2] as [number, number, number], color: '#19202c' },
         { camera: [0.5, 5.2, 9.5] as [number, number, number], color: '#20202a' }
       ];
+      activeSceneIndex=index;
+      modelRecords.forEach(rec=>{rec.root.visible=rec.sceneIndex===index&&rec.userVisible;});
       const preset = presets[((index % presets.length) + presets.length) % presets.length];
       cameraHome.set(...preset.camera);
       scene.background = new THREE.Color(preset.color);
@@ -407,9 +411,10 @@ export function createStudio(mount: HTMLElement, callbacks: StudioCallbacks): St
       scene.background = new THREE.Color(colors[effect] ?? colors.none);
       scene.fog = new THREE.Fog(colors[effect] ?? colors.none, 12, 34);
     },
-    loadModel:async(file,resources,category='other')=>{const urls:string[]=[];const manager=new THREE.LoadingManager();if(resources?.size)manager.setURLModifier(url=>{const tail=decodeURIComponent(url).split('/').pop()??url;const blob=resources.get(url)??resources.get(tail);if(blob){const u=URL.createObjectURL(blob);urls.push(u);return u;}return url;});const loader=new GLTFLoader(manager);const data=await file.arrayBuffer();const gltf=await new Promise<{scene:THREE.Group;animations:THREE.AnimationClip[]}>( (resolve,reject)=>loader.parse(data,'',resolve,reject));urls.forEach(url=>URL.revokeObjectURL(url));const root=new THREE.Group();root.name=file.name;root.userData.category=category;const model=gltf.scene;root.add(model);const bounds=new THREE.Box3().setFromObject(model),size=bounds.getSize(new THREE.Vector3()),max=Math.max(size.x,size.y,size.z)||1;model.scale.setScalar(2.2/max);const scaled=new THREE.Box3().setFromObject(model);model.position.y-=scaled.min.y;root.position.x=(modelRecords.length%3-1)*1.1;root.position.z=.8;importedModels.add(root);modelRecords.push({root,mixer:gltf.animations.length?new THREE.AnimationMixer(model):undefined,clips:gltf.animations});},
+    loadModel:async(file,resources,category='other')=>{const urls:string[]=[];const manager=new THREE.LoadingManager();if(resources?.size)manager.setURLModifier(url=>{const tail=decodeURIComponent(url).split('/').pop()??url;const blob=resources.get(url)??resources.get(tail);if(blob){const u=URL.createObjectURL(blob);urls.push(u);return u;}return url;});const loader=new GLTFLoader(manager);const data=await file.arrayBuffer();const gltf=await new Promise<{scene:THREE.Group;animations:THREE.AnimationClip[]}>( (resolve,reject)=>loader.parse(data,'',resolve,reject));urls.forEach(url=>URL.revokeObjectURL(url));const root=new THREE.Group();root.name=file.name;root.userData.category=category;const model=gltf.scene;root.add(model);const bounds=new THREE.Box3().setFromObject(model),size=bounds.getSize(new THREE.Vector3()),max=Math.max(size.x,size.y,size.z)||1;model.scale.setScalar(2.2/max);const scaled=new THREE.Box3().setFromObject(model);model.position.y-=scaled.min.y;root.position.x=(modelRecords.length%3-1)*1.1;root.position.z=.8;importedModels.add(root);modelRecords.push({root,mixer:gltf.animations.length?new THREE.AnimationMixer(model):undefined,clips:gltf.animations,sceneIndex:activeSceneIndex,userVisible:true});},
     setModelTransform:(i,p,r,scale)=>{const rec=modelRecords[i];if(rec){rec.root.position.set(...p);rec.root.rotation.set(...r);rec.root.scale.setScalar(scale);}},
-    setModelVisible:(i,visible)=>{const rec=modelRecords[i];if(rec)rec.root.visible=visible;},
+    setModelVisible:(i,visible)=>{const rec=modelRecords[i];if(rec){rec.userVisible=visible;rec.root.visible=rec.sceneIndex===activeSceneIndex&&visible;}},
+    setModelScene:(i,sceneIndex)=>{const rec=modelRecords[i];if(rec){rec.sceneIndex=sceneIndex;rec.root.visible=rec.sceneIndex===activeSceneIndex&&rec.userVisible;}},
     applyTexture:(i,blob)=>{const rec=modelRecords[i];if(!rec)return;const url=URL.createObjectURL(blob);new THREE.TextureLoader().load(url,texture=>{texture.colorSpace=THREE.SRGBColorSpace;rec.root.traverse(o=>{if(o instanceof THREE.Mesh){const mats=Array.isArray(o.material)?o.material:[o.material];mats.forEach(m=>{if(m instanceof THREE.MeshStandardMaterial){m.map=texture;m.needsUpdate=true;}});}});URL.revokeObjectURL(url);},undefined,()=>URL.revokeObjectURL(url));},
     attachModel:(i,targetIndex,slot)=>{const rec=modelRecords[i],target=modelRecords[targetIndex];if(!rec||!target||i===targetIndex)return;const box=new THREE.Box3().setFromObject(target.root),size=box.getSize(new THREE.Vector3()),center=box.getCenter(new THREE.Vector3()),assetBox=new THREE.Box3().setFromObject(rec.root),assetSize=assetBox.getSize(new THREE.Vector3()),max=Math.max(assetSize.x,assetSize.y,assetSize.z)||1;const desired=slot==='head'?Math.max(size.y*.18,.22):slot==='hand'?Math.max(size.y*.12,.15):Math.max(size.y*.22,.25);rec.root.scale.setScalar(desired/max);importedModels.remove(rec.root);target.root.add(rec.root);rec.root.position.set(center.x-target.root.position.x,box.max.y-(slot==='head'?size.y*.12:size.y*.3)-target.root.position.y,center.z-target.root.position.z);rec.root.userData.attachedTo=targetIndex;rec.root.userData.attachSlot=slot;},
     removeModel:i=>{const rec=modelRecords[i];if(!rec)return;rec.mixer?.stopAllAction();rec.root.parent?.remove(rec.root);rec.root.traverse(o=>{if(o instanceof THREE.Mesh){o.geometry.dispose();const mats=Array.isArray(o.material)?o.material:[o.material];mats.forEach(m=>m.dispose());}});modelRecords.splice(i,1);},

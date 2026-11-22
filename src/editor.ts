@@ -12,7 +12,8 @@ type ProjectData = {
   caption: string;
   effect: string;
   scene: number;
-  models: { name: string; data: ArrayBuffer; resources?: { path: string; blob: Blob }[]; category?: string; position?: [number,number,number]; rotation?: [number,number,number]; scale?: number; visible?: boolean; attachedTo?: number; attachSlot?: string; textureBlob?: Blob }[];
+  scenes?: { name: string; duration: number; caption: string; effect: string }[];
+  models: { name: string; data: ArrayBuffer; resources?: { path: string; blob: Blob }[]; category?: string; position?: [number,number,number]; rotation?: [number,number,number]; scale?: number; visible?: boolean; attachedTo?: number; attachSlot?: string; textureBlob?: Blob; sceneIndex?: number }[];
 };
 
 const DB_NAME = '3d-shorts-studio';
@@ -54,11 +55,9 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
     <div class="editor-heading"><div><span class="eyebrow">PHASE 02 / CREATION</span><h2>動画制作ワークスペース</h2></div><span class="editor-duration">30 SEC</span></div>
     <div class="editor-block">
       <div class="editor-label"><b>SCENE TIMELINE</b><span id="time-readout">00:00.0 / 00:30.0</span></div>
-      <div class="scene-tabs">
-        <button class="scene-tab selected" data-scene="0" type="button">01 <small>街を歩く</small></button>
-        <button class="scene-tab" data-scene="1" type="button">02 <small>別アングル</small></button>
-        <button class="scene-tab" data-scene="2" type="button">03 <small>俯瞰</small></button>
-      </div>
+      <div class="scene-tabs" id="scene-tabs"></div>
+      <div class="scene-manager-controls"><button id="scene-add" class="action-button" type="button">＋ シーン追加</button><button id="scene-duplicate" class="action-button" type="button">複製</button><button id="scene-delete" class="action-button" type="button">削除</button><button id="scene-up" class="action-button" type="button">↑</button><button id="scene-down" class="action-button" type="button">↓</button></div>
+      <label class="scene-duration-label">シーンの長さ（秒）<input id="scene-duration" class="text-field" type="number" min="1" max="30" step="1" value="10"></label>
       <input id="timeline" class="timeline" type="range" min="0" max="30" step="0.1" value="0" aria-label="タイムライン">
       <div class="timeline-scale"><span>00:00</span><span>00:10</span><span>00:20</span><span>00:30</span></div>
       <div class="editor-actions"><button id="editor-play" class="action-button accent" type="button">Ⅱ 一時停止</button><button id="editor-start" class="action-button" type="button">先頭へ</button></div>
@@ -98,11 +97,12 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
   const message = $('#editor-message');
   const captionPreview = document.querySelector<HTMLElement>('#caption-preview')!;
   let currentScene = 0;
+  let scenes = [{name:'街を歩く',duration:10,caption:'新しい世界へ歩き出そう',effect:'none'},{name:'別アングル',duration:10,caption:'',effect:'none'},{name:'俯瞰',duration:10,caption:'',effect:'none'}];
   let currentEffect = 'none';
   let playing = true;
   let disposed = false;
   let exportFrame = 0;
-  let modelFiles: { name: string; data: ArrayBuffer; resources?: { path: string; blob: Blob }[]; category?: string; position?: [number,number,number]; rotation?: [number,number,number]; scale?: number; visible?: boolean; attachedTo?: number; attachSlot?: string; textureBlob?: Blob }[] = [];
+  let modelFiles: { name: string; data: ArrayBuffer; resources?: { path: string; blob: Blob }[]; category?: string; position?: [number,number,number]; rotation?: [number,number,number]; scale?: number; visible?: boolean; attachedTo?: number; attachSlot?: string; textureBlob?: Blob; sceneIndex?: number }[] = [];
   let selectedModel=-1, animationPlaying=false;
   let zipArchive:JSZip|null=null;
   let zipCatalog:ZipAsset[]=[];
@@ -110,6 +110,11 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
   const assetLibrary=$('#asset-library'), categoryInput=$('#asset-category') as HTMLSelectElement;
   const transformInputs=['#asset-x','#asset-y','#asset-z','#asset-rotation','#asset-scale'].map(s=>$(s) as HTMLInputElement);
 
+  const sceneTabs=$('#scene-tabs');
+  const durationInput=$('#scene-duration') as HTMLInputElement;
+  const storeScene=()=>{const sc=scenes[currentScene];if(sc){sc.caption=caption.value;sc.effect=currentEffect;}};
+  const renderScenes=()=>{sceneTabs.innerHTML='';scenes.forEach((sc,i)=>{const b=document.createElement('button');b.type='button';b.className='scene-tab'+(i===currentScene?' selected':'');b.innerHTML='<strong></strong><small></small>';b.querySelector('strong')!.textContent=String(i+1).padStart(2,'0')+' '+sc.name;b.querySelector('small')!.textContent=sc.duration+'秒';b.addEventListener('click',()=>switchScene(i));sceneTabs.append(b);});durationInput.value=String(scenes[currentScene]?.duration||10);($('#scene-delete') as HTMLButtonElement).disabled=scenes.length<=1;($('#scene-up') as HTMLButtonElement).disabled=currentScene===0;($('#scene-down') as HTMLButtonElement).disabled=currentScene===scenes.length-1;};
+  const switchScene=(i:number)=>{if(i<0||i>=scenes.length)return;storeScene();currentScene=i;caption.value=scenes[i].caption;currentEffect=scenes[i].effect;studio.setScene(i);modelFiles.forEach((m,j)=>studio.setModelScene(j,m.sceneIndex??0));studio.setEffect(currentEffect);root.querySelectorAll('[data-effect]').forEach(b=>b.classList.toggle('active',(b as HTMLElement).dataset.effect===currentEffect));renderScenes();updateCaption();};
   const updateTime = () => {
     const value = Number(timeline.value);
     $('#time-readout').textContent = `00:${String(Math.floor(value)).padStart(2, '0')}.${Math.round((value % 1) * 10)} / 00:30.0`;
@@ -118,6 +123,13 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
     captionPreview.textContent = caption.value;
     captionPreview.hidden = !caption.value.trim();
   };
+  $('#scene-add').addEventListener('click',()=>{storeScene();scenes.push({name:'シーン '+(scenes.length+1),duration:10,caption:'',effect:'none'});switchScene(scenes.length-1);});
+  $('#scene-duplicate').addEventListener('click',()=>{storeScene();const source=scenes[currentScene];scenes.splice(currentScene+1,0,{...source,name:source.name+' コピー'});const duplicatedIndex=currentScene+1;modelFiles.filter(m=>(m.sceneIndex??0)===currentScene).forEach(m=>{const clone={...m,sceneIndex:duplicatedIndex,position:[...(m.position??[0,0,0])] as [number,number,number],rotation:[...(m.rotation??[0,0,0])] as [number,number,number]};modelFiles.push(clone);void studio.loadModel(new File([clone.data],clone.name),undefined,clone.category).then(()=>{const idx=modelFiles.indexOf(clone);studio.setModelScene(idx,duplicatedIndex);studio.setModelTransform(idx,clone.position!,clone.rotation!,clone.scale??1);if(clone.visible===false)studio.setModelVisible(idx,false);});});switchScene(duplicatedIndex);});
+  $('#scene-delete').addEventListener('click',()=>{if(scenes.length<=1)return;const removed=currentScene;scenes.splice(removed,1);modelFiles.forEach(m=>{if((m.sceneIndex??0)>removed)m.sceneIndex=(m.sceneIndex??0)-1;else if((m.sceneIndex??0)===removed)m.sceneIndex=Math.min(removed,scenes.length-1);});switchScene(Math.min(removed,scenes.length-1));});
+  $('#scene-up').addEventListener('click',()=>{if(currentScene<=0)return;storeScene();const a=currentScene-1;[scenes[a],scenes[currentScene]]=[scenes[currentScene],scenes[a]];modelFiles.forEach(m=>{if(m.sceneIndex===currentScene)m.sceneIndex=a;else if(m.sceneIndex===a)m.sceneIndex=currentScene;});switchScene(a);});
+  $('#scene-down').addEventListener('click',()=>{if(currentScene>=scenes.length-1)return;storeScene();const a=currentScene+1;[scenes[currentScene],scenes[a]]=[scenes[a],scenes[currentScene]];modelFiles.forEach(m=>{if(m.sceneIndex===currentScene)m.sceneIndex=a;else if(m.sceneIndex===a)m.sceneIndex=currentScene;});switchScene(a);});
+  durationInput.addEventListener('change',()=>{scenes[currentScene].duration=Math.max(1,Math.min(30,Number(durationInput.value)||1));durationInput.value=String(scenes[currentScene].duration);renderScenes();});
+  renderScenes();
   timeline.addEventListener('input', () => {
     studio.setTimelineTime(Number(timeline.value));
     updateTime();
@@ -132,9 +144,7 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
   });
   root.querySelectorAll<HTMLButtonElement>('[data-scene]').forEach((button) => {
     button.addEventListener('click', () => {
-      currentScene = Number(button.dataset.scene);
-      studio.setScene(currentScene);
-      root.querySelectorAll('[data-scene]').forEach((item) => item.classList.toggle('selected', item === button));
+      switchScene(Number(button.dataset.scene));
     });
   });
   caption.addEventListener('input', updateCaption);
@@ -147,7 +157,7 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
   });
   const renderCatalog=()=>{const host=$('#zip-catalog');host.innerHTML='';if(!zipCatalog.length)return;const summary=document.createElement('p');summary.className='zip-summary';summary.textContent='モデル '+zipCatalog.filter(a=>a.isModel).length+'件 / 画像 '+zipCatalog.filter(a=>a.kind==='texture').length+'件';host.append(summary);const filter=document.createElement('select');filter.className='asset-select';filter.innerHTML='<option value="all">全素材</option>'+Object.entries(categoryLabel).map(([k,v])=>'<option value="'+k+'">'+v+'</option>').join('');host.append(filter);const list=document.createElement('div');list.className='zip-catalog-list';const draw=()=>{list.innerHTML='';zipCatalog.filter(a=>filter.value==='all'||a.kind===filter.value).forEach(a=>{const row=document.createElement('label');row.className='zip-entry';const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.checked=a.selected;checkbox.disabled=!a.isModel||a.loaded;checkbox.addEventListener('change',()=>a.selected=checkbox.checked);const name=document.createElement('span');name.textContent=a.name;name.className='zip-entry-name';const tag=document.createElement('small');tag.textContent=categoryLabel[a.kind]+(a.loaded?' · 読込済':'');row.append(checkbox,name,tag);list.append(row);});};filter.addEventListener('change',draw);draw();host.append(list);refreshAssetApply();};
   $('#zip-cancel').addEventListener('click',()=>{importCancelled=true;$('#asset-status').textContent='中止要求を受け付けたよ。';});
-  $('#zip-load-selected').addEventListener('click',async()=>{if(!zipArchive)return;const picked=zipCatalog.filter(a=>a.isModel&&a.selected&&!a.loaded);const batch=picked.slice(0,5);if(!picked.length){message.textContent='読み込むモデルを選択してね。';return;}importCancelled=false;const btn=$('#zip-load-selected') as HTMLButtonElement;btn.disabled=true;let success=0,fail=0;const all=Object.values(zipArchive.files);for(let n=0;n<batch.length;n++){if(importCancelled)break;const asset=batch[n];$('#asset-status').textContent='今回の読み込み '+(n+1)+' / '+batch.length+'：'+asset.name;try{const bytes=await zipArchive.file(asset.zipPath)!.async('arraybuffer');const modelFile=new File([bytes],asset.name,{type:asset.name.toLowerCase().endsWith('.glb')?'model/gltf-binary':'model/gltf+json'});const folder=asset.zipPath.includes('/')?asset.zipPath.slice(0,asset.zipPath.lastIndexOf('/')+1):'';let refs:string[]=[];if(asset.zipPath.toLowerCase().endsWith('.gltf')){const json=JSON.parse(new TextDecoder().decode(bytes));refs=(json.buffers||[]).concat(json.images||[]).map((x:any)=>x.uri).filter((x:string)=>x&&!x.startsWith('data:'));}const paths=asset.zipPath.toLowerCase().endsWith('.gltf')?(refs.length?refs.map(p=>folder+p):all.filter(x=>folder&&x.name.startsWith(folder)&&/\.(png|jpe?g|webp|bin|ktx2)$/i.test(x.name)).map(x=>x.name)):[];const resources=new Map<string,Blob>(),savedResources:{path:string;blob:Blob}[]=[];for(const path of paths){const blob=await zipArchive.file(path)?.async('blob');if(blob){resources.set(path,blob);resources.set(path.slice(folder.length),blob);resources.set(path.split('/').pop()!,blob);savedResources.push({path,blob});}}const cat=asset.kind;await studio.loadModel(modelFile,resources.size?resources:undefined,cat);modelFiles.push({name:modelFile.name,data:bytes,resources:savedResources,category:cat,position:[0,0,0],rotation:[0,0,0],scale:1});asset.loaded=true;success++;renderLibrary();}catch(err){fail++;message.textContent='読み込み失敗 '+asset.name+'：'+(err instanceof Error?err.message:'');}renderCatalog();}selectedModel=modelFiles.length?modelFiles.length-1:-1;selectAsset(selectedModel);btn.disabled=false;$('#asset-status').textContent=(importCancelled?'中止':'今回完了')+'：成功 '+success+' / 失敗 '+fail+(picked.length>batch.length?'。残り '+(picked.length-batch.length)+'件は次の読み込みボタンで続けてね。':'');});
+  $('#zip-load-selected').addEventListener('click',async()=>{if(!zipArchive)return;const picked=zipCatalog.filter(a=>a.isModel&&a.selected&&!a.loaded);const batch=picked.slice(0,5);if(!picked.length){message.textContent='読み込むモデルを選択してね。';return;}importCancelled=false;const btn=$('#zip-load-selected') as HTMLButtonElement;btn.disabled=true;let success=0,fail=0;const all=Object.values(zipArchive.files);for(let n=0;n<batch.length;n++){if(importCancelled)break;const asset=batch[n];$('#asset-status').textContent='今回の読み込み '+(n+1)+' / '+batch.length+'：'+asset.name;try{const bytes=await zipArchive.file(asset.zipPath)!.async('arraybuffer');const modelFile=new File([bytes],asset.name,{type:asset.name.toLowerCase().endsWith('.glb')?'model/gltf-binary':'model/gltf+json'});const folder=asset.zipPath.includes('/')?asset.zipPath.slice(0,asset.zipPath.lastIndexOf('/')+1):'';let refs:string[]=[];if(asset.zipPath.toLowerCase().endsWith('.gltf')){const json=JSON.parse(new TextDecoder().decode(bytes));refs=(json.buffers||[]).concat(json.images||[]).map((x:any)=>x.uri).filter((x:string)=>x&&!x.startsWith('data:'));}const paths=asset.zipPath.toLowerCase().endsWith('.gltf')?(refs.length?refs.map(p=>folder+p):all.filter(x=>folder&&x.name.startsWith(folder)&&/\.(png|jpe?g|webp|bin|ktx2)$/i.test(x.name)).map(x=>x.name)):[];const resources=new Map<string,Blob>(),savedResources:{path:string;blob:Blob}[]=[];for(const path of paths){const blob=await zipArchive.file(path)?.async('blob');if(blob){resources.set(path,blob);resources.set(path.slice(folder.length),blob);resources.set(path.split('/').pop()!,blob);savedResources.push({path,blob});}}const cat=asset.kind;await studio.loadModel(modelFile,resources.size?resources:undefined,cat);modelFiles.push({name:modelFile.name,data:bytes,resources:savedResources,category:cat,position:[0,0,0],rotation:[0,0,0],scale:1,sceneIndex:currentScene});asset.loaded=true;success++;renderLibrary();}catch(err){fail++;message.textContent='読み込み失敗 '+asset.name+'：'+(err instanceof Error?err.message:'');}renderCatalog();}selectedModel=modelFiles.length?modelFiles.length-1:-1;selectAsset(selectedModel);btn.disabled=false;$('#asset-status').textContent=(importCancelled?'中止':'今回完了')+'：成功 '+success+' / 失敗 '+fail+(picked.length>batch.length?'。残り '+(picked.length-batch.length)+'件は次の読み込みボタンで続けてね。':'');});
   const refreshAssetApply=()=>{const target=$('#asset-target') as HTMLSelectElement;target.innerHTML=modelFiles.map((m,i)=>'<option value="'+i+'">'+m.name+'</option>').join('');const textures=$('#texture-source') as HTMLSelectElement;textures.innerHTML=zipCatalog.filter(a=>a.kind==='texture').map(a=>'<option value="'+a.zipPath+'">'+a.name+'</option>').join('');};
   $('#asset-attach').addEventListener('click',()=>{if(selectedModel<0){message.textContent='取り付けるモデルを選んでね。';return;}const target=+($('#asset-target') as HTMLSelectElement).value;const slot=($('#asset-slot') as HTMLSelectElement).value;if(target===selectedModel){message.textContent='取り付け元と対象を別々に選んでね。';return;}studio.attachModel(selectedModel,target,slot);modelFiles[selectedModel].attachedTo=target;modelFiles[selectedModel].attachSlot=slot;message.textContent='モデルを取り付けたよ。';});
   $('#texture-apply').addEventListener('click',async()=>{if(!zipArchive||selectedModel<0){message.textContent='テクスチャと適用先モデルを選んでね。';return;}try{const blob=await zipArchive.file(($('#texture-source') as HTMLSelectElement).value)?.async('blob');if(blob){studio.applyTexture(selectedModel,blob);modelFiles[selectedModel].textureBlob=blob;}}catch(err){message.textContent='テクスチャ適用に失敗したよ。';}});
@@ -178,7 +188,7 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
       } else {
         const bytes = await file.arrayBuffer();
         await studio.loadModel(file, undefined, category);
-        modelFiles.push({ name: file.name, data: bytes, category, position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 });
+        modelFiles.push({ name: file.name, data: bytes, category, position: [0, 0, 0], rotation: [0, 0, 0], scale: 1, sceneIndex: currentScene });
         selectedModel = modelFiles.length - 1;
         renderLibrary(); selectAsset(selectedModel);
         $('#asset-status').textContent = '素材登録：' + file.name;
@@ -195,8 +205,8 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
   });
 
   const snapshot = (): ProjectData => ({
-    version: 1, duration: 30, caption: caption.value, effect: currentEffect,
-    scene: currentScene, models: modelFiles
+    version: 1, duration: scenes.reduce((sum,s)=>sum+s.duration,0), caption: caption.value, effect: currentEffect,
+    scene: currentScene, scenes, models: modelFiles
   });
   $('#save-project').addEventListener('click', async () => {
     try { await saveProject(snapshot()); message.textContent = 'プロジェクトをこのiPhoneに保存したよ。'; }
@@ -207,7 +217,9 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
     if (!saved || disposed) return;
     caption.value = saved.caption ?? '';
     currentEffect = saved.effect ?? 'none';
-    currentScene = saved.scene ?? 0;
+    scenes=saved.scenes?.length?saved.scenes:scenes;
+    currentScene = Math.max(0,Math.min(saved.scene??0,scenes.length-1));
+    renderScenes();
     studio.setScene(currentScene); studio.setEffect(currentEffect);
     root.querySelectorAll<HTMLButtonElement>('[data-scene]').forEach((item) => item.classList.toggle('selected', Number(item.dataset.scene) === currentScene));
     root.querySelectorAll<HTMLButtonElement>('[data-effect]').forEach((item) => item.classList.toggle('active', item.dataset.effect === currentEffect));
@@ -219,8 +231,9 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
           const tail = resource.path.split('/').pop();
           if (tail) resources.set(tail, resource.blob);
         }
+        studio.setScene(model.sceneIndex??currentScene);
         await studio.loadModel(new File([model.data], model.name), resources.size ? resources : undefined, model.category ?? 'other');
-        modelFiles.push(model);const restoredIndex=modelFiles.length-1;if(model.visible===false)studio.setModelVisible(restoredIndex,false);if(model.textureBlob)studio.applyTexture(restoredIndex,model.textureBlob);if(typeof model.attachedTo==='number'&&model.attachedTo!==restoredIndex&&model.attachedTo<modelFiles.length)studio.attachModel(restoredIndex,model.attachedTo,model.attachSlot??'head');
+        modelFiles.push({...model,sceneIndex:model.sceneIndex??currentScene});const restoredIndex=modelFiles.length-1;studio.setModelScene(restoredIndex,modelFiles[restoredIndex].sceneIndex??0;if(model.visible===false)studio.setModelVisible(restoredIndex,false);if(model.textureBlob)studio.applyTexture(restoredIndex,model.textureBlob);if(typeof model.attachedTo==='number'&&model.attachedTo!==restoredIndex&&model.attachedTo<modelFiles.length)studio.attachModel(restoredIndex,model.attachedTo,model.attachSlot??'head');
       } catch { /* Keep the rest of the project usable if one asset is invalid. */ }
     }
     updateCaption();
@@ -284,6 +297,6 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
     window.setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, 30_000);
   });
 
-  renderLibrary(); selectAsset(-1); updateCaption(); updateTime();
+  renderScenes(); renderLibrary(); selectAsset(-1); updateCaption(); updateTime();
   return () => { disposed = true; cancelAnimationFrame(exportFrame); };
 }
