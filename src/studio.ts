@@ -1,289 +1,442 @@
-import type { StudioController } from './studio';
-import JSZip from 'jszip';
-type AssetKind='character'|'hair'|'face'|'clothing'|'prop'|'building'|'nature'|'texture'|'other';
-type ZipAsset={path:string;name:string;kind:AssetKind;selected:boolean;loaded:boolean;zipPath:string;isModel:boolean};
-const categoryLabel:Record<AssetKind,string>={character:'キャラクター',hair:'髪',face:'顔',clothing:'服・装備',prop:'小物',building:'建物',nature:'自然',texture:'テクスチャ',other:'未分類'};
-function classifyAsset(path:string):AssetKind{const s=path.toLowerCase();if(/\.(png|jpe?g|webp|bmp|tga)$/i.test(s))return'texture';if(/hair|hairstyle|髪/.test(s))return'hair';if(/face|head|skin|顔/.test(s))return'face';if(/cloth|shirt|pants|dress|armor|outfit|衣装|服/.test(s))return'clothing';if(/character|female|male|body|humanoid|person|全身/.test(s))return'character';if(/weapon|accessory|prop|item|gun|sword|bag|小物|装備/.test(s))return'prop';if(/building|house|architecture|建物/.test(s))return'building';if(/tree|plant|grass|flower|nature|自然/.test(s))return'nature';return'other';}
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-
-type ProjectData = {
-  version: 1;
-  duration: 30;
-  caption: string;
-  effect: string;
-  scene: number;
-  models: { name: string; data: ArrayBuffer; resources?: { path: string; blob: Blob }[]; category?: string; position?: [number,number,number]; rotation?: [number,number,number]; scale?: number; visible?: boolean; attachedTo?: number; attachSlot?: string }[];
+type StudioCallbacks = {
+  onReady: () => void;
+  onFps: (fps: number) => void;
+  onError: (message: string) => void;
 };
 
-const DB_NAME = '3d-shorts-studio';
-const STORE = 'projects';
+export type StudioController = {
+  togglePlayback: () => boolean;
+  resetCamera: () => void;
+  dispose: () => void;
+  setTimelineTime: (seconds: number) => void;
+  getTimelineTime: () => number;
+  setPlaying: (playing: boolean) => void;
+  setScene: (index: number) => void;
+  setEffect: (effect: string) => void;
+  loadModel: (file: File, resources?: Map<string,Blob>, category?: string) => Promise<void>;
+  setModelVisible:(index:number,visible:boolean)=>void;
+  applyTexture:(index:number,texture:Blob)=>void;
+  attachModel:(index:number,targetIndex:number,slot:string)=>void;
+  setModelTransform:(index:number,position:[number,number,number],rotation:[number,number,number],scale:number)=>void;
+  removeModel:(index:number)=>void; getModelAnimations:(index:number)=>string[]; setModelAnimation:(index:number,clipIndex:number)=>void; setModelAnimationPlaying:(index:number,playing:boolean)=>void; clearImportedModels: () => void;
+};
 
-function openDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore(STORE);
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
+function makeMaterial(color: THREE.ColorRepresentation, roughness = 0.82): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color, roughness, metalness: 0.02 });
 }
 
-async function saveProject(project: ProjectData): Promise<void> {
-  const db = await openDatabase();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).put(project, 'autosave');
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-  db.close();
+function addBox(
+  parent: THREE.Group,
+  size: [number, number, number],
+  position: [number, number, number],
+  material: THREE.Material
+): THREE.Mesh {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(...size), material);
+  mesh.position.set(...position);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  parent.add(mesh);
+  return mesh;
 }
 
-async function readProject(): Promise<ProjectData | undefined> {
-  const db = await openDatabase();
-  const result = await new Promise<ProjectData | undefined>((resolve, reject) => {
-    const request = db.transaction(STORE, 'readonly').objectStore(STORE).get('autosave');
-    request.onsuccess = () => resolve(request.result as ProjectData | undefined);
-    request.onerror = () => reject(request.error);
-  });
-  db.close();
-  return result;
+function createCharacter(): { root: THREE.Group; animate: (time: number, playing: boolean) => void } {
+  const root = new THREE.Group();
+  const skin = makeMaterial('#e9b991');
+  const jacket = makeMaterial('#e9f0f4');
+  const pants = makeMaterial('#26364c');
+  const shoes = makeMaterial('#f4f2eb');
+  const dark = makeMaterial('#253044');
+  const head = new THREE.Group();
+  head.position.y = 1.48;
+  const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.25, 24, 18), skin);
+  headMesh.scale.set(0.88, 1.12, 0.92);
+  headMesh.castShadow = true;
+  head.add(headMesh);
+  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.255, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.52), dark);
+  hair.position.y = 0.07;
+  hair.castShadow = true;
+  head.add(hair);
+  const eyeMat = new THREE.MeshStandardMaterial({ color: '#172033', roughness: 0.4 });
+  for (const x of [-0.075, 0.075]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.018, 10, 8), eyeMat);
+    eye.position.set(x, -0.015, 0.218);
+    head.add(eye);
+  }
+  root.add(head);
+
+  const torso = addBox(root, [0.52, 0.62, 0.3], [0, 0.98, 0], jacket);
+  torso.geometry.translate(0, 0, 0);
+  const collar = addBox(root, [0.18, 0.13, 0.035], [0, 1.285, 0.16], makeMaterial('#c5d5df'));
+  collar.castShadow = false;
+
+  const armPivots: THREE.Group[] = [];
+  for (const side of [-1, 1]) {
+    const pivot = new THREE.Group();
+    pivot.position.set(side * 0.32, 1.2, 0);
+    const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.28, 4, 8), jacket);
+    upper.position.y = -0.18;
+    upper.castShadow = true;
+    pivot.add(upper);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.075, 12, 10), skin);
+    hand.position.y = -0.39;
+    pivot.add(hand);
+    root.add(pivot);
+    armPivots.push(pivot);
+  }
+
+  const legPivots: THREE.Group[] = [];
+  for (const side of [-1, 1]) {
+    const pivot = new THREE.Group();
+    pivot.position.set(side * 0.14, 0.69, 0);
+    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.095, 0.35, 4, 8), pants);
+    leg.position.y = -0.24;
+    leg.castShadow = true;
+    pivot.add(leg);
+    const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.105, 0.32), shoes);
+    shoe.position.set(0, -0.47, 0.075);
+    shoe.castShadow = true;
+    pivot.add(shoe);
+    root.add(pivot);
+    legPivots.push(pivot);
+  }
+
+  return {
+    root,
+    animate: (time, playing) => {
+      const walk = playing ? Math.sin(time * 4.2) : 0;
+      legPivots[0].rotation.x = walk * 0.42;
+      legPivots[1].rotation.x = -walk * 0.42;
+      armPivots[0].rotation.x = -walk * 0.32 - 0.08;
+      armPivots[1].rotation.x = walk * 0.32 - 0.08;
+      root.position.y = playing ? Math.abs(Math.sin(time * 4.2)) * 0.035 : 0;
+      root.rotation.y = Math.sin(time * 0.6) * 0.035;
+      head.rotation.z = Math.sin(time * 1.4) * 0.025;
+      void torso;
+      void collar;
+    }
+  };
 }
 
-export function mountEditor(root: HTMLElement, studio: StudioController): () => void {
-  root.innerHTML = `
-    <div class="editor-heading"><div><span class="eyebrow">PHASE 02 / CREATION</span><h2>動画制作ワークスペース</h2></div><span class="editor-duration">30 SEC</span></div>
-    <div class="editor-block">
-      <div class="editor-label"><b>SCENE TIMELINE</b><span id="time-readout">00:00.0 / 00:30.0</span></div>
-      <div class="scene-tabs">
-        <button class="scene-tab selected" data-scene="0" type="button">01 <small>街を歩く</small></button>
-        <button class="scene-tab" data-scene="1" type="button">02 <small>別アングル</small></button>
-        <button class="scene-tab" data-scene="2" type="button">03 <small>俯瞰</small></button>
-      </div>
-      <input id="timeline" class="timeline" type="range" min="0" max="30" step="0.1" value="0" aria-label="タイムライン">
-      <div class="timeline-scale"><span>00:00</span><span>00:10</span><span>00:20</span><span>00:30</span></div>
-      <div class="editor-actions"><button id="editor-play" class="action-button accent" type="button">Ⅱ 一時停止</button><button id="editor-start" class="action-button" type="button">先頭へ</button></div>
-    </div>
-    <div class="editor-block">
-      <div class="editor-label"><b>CAPTIONS</b><span>字幕テキスト</span></div>
-      <input id="caption-text" class="text-field" maxlength="80" placeholder="ここに字幕を入力" value="新しい世界へ歩き出そう">
-      <p class="field-note">字幕はプレビューに重ねて表示し、書き出し時に映像へ合成するよ。</p>
-    </div>
-    <div class="editor-block">
-      <div class="editor-label"><b>VISUAL EFFECT</b><span>映像の雰囲気</span></div>
-      <div class="effect-grid">
-        <button class="effect-choice active" data-effect="none" type="button">Natural</button>
-        <button class="effect-choice" data-effect="warm" type="button">Warm</button>
-        <button class="effect-choice" data-effect="cool" type="button">Cool</button>
-        <button class="effect-choice" data-effect="noir" type="button">Noir</button>
-        <button class="effect-choice" data-effect="dreamy" type="button">Dreamy</button>
-      </div>
-    </div>
-    <div class="editor-block">
-      <div class="editor-label"><b>3D ASSET LIBRARY</b><span>GLB / glTF</span></div>
-      <label class="upload-button" for="model-file">＋ 3Dモデルを読み込む</label>
-      <input id="model-file" type="file" accept=".glb,.gltf,.zip,model/gltf-binary,model/gltf+json,application/zip" hidden>
-      <p id="asset-status" class="field-note">ZIPをカタログ化し必要なモデルだけ読み込めるよ。</p><div id="zip-catalog" class="zip-catalog"></div><div class="zip-import-controls"><button id="zip-load-selected" class="action-button accent" type="button">選択素材を読み込む</button><button id="zip-cancel" class="action-button" type="button">読み込み中止</button></div><div id="asset-library" class="asset-library"></div><div class="asset-apply-tools"><label>対象モデル<select id="asset-target" class="asset-select"></select></label><label>取り付け位置<select id="asset-slot" class="asset-select"><option value="head">頭・髪</option><option value="body">体・服</option><option value="hand">手・小物</option></select></label><button id="asset-attach" class="action-button" type="button">選択モデルを取り付ける</button><label>テクスチャ<select id="texture-source" class="asset-select"></select></label><button id="texture-apply" class="action-button" type="button">テクスチャを適用</button></div><div class="asset-tools"><label class="asset-label">カテゴリ<select id="asset-category" class="asset-select"><option value="character">キャラクター</option><option value="hair">髪</option><option value="face">顔</option><option value="clothing">服・装備</option><option value="building">建物</option><option value="prop">小物</option><option value="nature">自然</option><option value="other">その他</option></select></label><label class="asset-label">大きさ<input id="asset-scale" type="range" min="0.1" max="5" step="0.1" value="1"></label><div class="asset-transform"><label>位置 X<input id="asset-x" type="range" min="-5" max="5" step="0.1" value="0"></label><label>位置 Y<input id="asset-y" type="range" min="0" max="5" step="0.1" value="0"></label><label>位置 Z<input id="asset-z" type="range" min="-10" max="10" step="0.1" value="0"></label></div><div class="asset-transform"><label>回転 Y<input id="asset-rotation" type="range" min="-180" max="180" step="5" value="0"></label></div><div class="asset-animation"><label>アニメーション<select id="asset-animation" class="asset-select"><option value="-1">なし</option></select></label><button id="asset-anim-play" class="action-button" type="button">アニメーション再生</button></div></div><button id="clear-models" class="text-button" type="button">読み込んだモデルをすべて外す</button>
-    </div>
-    <div class="editor-footer">
-      <button id="save-project" class="action-button" type="button">プロジェクトを保存</button>
-      <button id="export-video" class="action-button accent" type="button">30秒のMP4を書き出す</button>
-    </div>
-    <p id="editor-message" class="editor-message" role="status">編集内容はこのiPhoneのブラウザ内に保存できるよ。</p>
-    <div id="caption-preview" class="caption-preview" aria-live="polite">新しい世界へ歩き出そう</div>
-  `;
+function buildScene(scene: THREE.Scene): THREE.Group {
+  const world = new THREE.Group();
+  scene.add(world);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), makeMaterial('#202a35'));
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -0.025;
+  ground.receiveShadow = true;
+  world.add(ground);
 
-  const $ = <T extends HTMLElement>(selector: string) => root.querySelector<T>(selector)!;
-  const timeline = $('#timeline') as HTMLInputElement;
-  const caption = $('#caption-text') as HTMLInputElement;
-  const message = $('#editor-message');
-  const captionPreview = document.querySelector<HTMLElement>('#caption-preview')!;
-  let currentScene = 0;
-  let currentEffect = 'none';
+  const road = new THREE.Mesh(new THREE.PlaneGeometry(5.2, 80), makeMaterial('#303944'));
+  road.rotation.x = -Math.PI / 2;
+  road.position.y = 0;
+  road.receiveShadow = true;
+  world.add(road);
+
+  const lineMat = new THREE.MeshStandardMaterial({ color: '#d8cba9', roughness: 1 });
+  for (let z = -24; z < 25; z += 4) {
+    const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.09, 1.8), lineMat);
+    dash.rotation.x = -Math.PI / 2;
+    dash.position.set(0, 0.012, z);
+    world.add(dash);
+  }
+
+  const buildingColors = ['#47596b', '#586575', '#354657', '#6b7782'];
+  for (let i = 0; i < 18; i++) {
+    const side = i % 2 === 0 ? -1 : 1;
+    const row = Math.floor(i / 2);
+    const height = 2.8 + ((i * 7) % 5) * 0.62;
+    const width = 1.6 + ((i * 3) % 3) * 0.35;
+    const depth = 2.1 + ((i * 5) % 3) * 0.4;
+    const building = new THREE.Group();
+    building.position.set(side * (4.2 + (row % 2) * 0.8), 0, -row * 4.8 - 3);
+    const body = addBox(building, [width, height, depth], [0, height / 2, 0], makeMaterial(buildingColors[i % buildingColors.length]));
+    body.castShadow = true;
+    const windowMat = new THREE.MeshStandardMaterial({ color: '#e5c994', emissive: '#80633b', emissiveIntensity: 0.24, roughness: 0.5 });
+    for (let y = 0.8; y < height - 0.25; y += 0.72) {
+      for (let x = -width / 2 + 0.32; x < width / 2 - 0.12; x += 0.48) {
+        const windowMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.28), windowMat);
+        windowMesh.position.set(x, y, depth / 2 + 0.008);
+        building.add(windowMesh);
+      }
+    }
+    world.add(building);
+  }
+
+  const treeMat = makeMaterial('#344e49');
+  const trunkMat = makeMaterial('#665347');
+  for (let i = 0; i < 10; i++) {
+    const side = i % 2 === 0 ? -1 : 1;
+    const tree = new THREE.Group();
+    tree.position.set(side * (3.2 + (i % 3) * 0.4), 0, -i * 5 - 2);
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.11, 1.1, 8), trunkMat);
+    trunk.position.y = 0.55;
+    trunk.castShadow = true;
+    tree.add(trunk);
+    const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(0.58, 1), treeMat);
+    crown.position.y = 1.42;
+    crown.scale.y = 1.22;
+    crown.castShadow = true;
+    tree.add(crown);
+    world.add(tree);
+  }
+
+  const lampMat = new THREE.MeshStandardMaterial({ color: '#f2d8a3', emissive: '#e9b66b', emissiveIntensity: 0.6 });
+  for (let i = 0; i < 8; i++) {
+    for (const side of [-1, 1]) {
+      const lamp = new THREE.Group();
+      lamp.position.set(side * 3.15, 0, -i * 6 - 1);
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.05, 3.4, 8), makeMaterial('#48525e'));
+      pole.position.y = 1.7;
+      lamp.add(pole);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 8), lampMat);
+      head.position.set(-side * 0.1, 3.38, 0);
+      lamp.add(head);
+      world.add(lamp);
+    }
+  }
+
+  return world;
+}
+
+export function createStudio(mount: HTMLElement, callbacks: StudioCallbacks): StudioController {
+  if (!('WebGL2RenderingContext' in window)) {
+    const message = 'このSafariではWebGL 2が利用できないみたい。iOSを更新するか、Safariの設定を確認してね。';
+    callbacks.onError(message);
+    throw new Error(message);
+  }
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color('#101923');
+  scene.fog = new THREE.Fog('#101923', 12, 34);
+
+  const camera = new THREE.PerspectiveCamera(37, 9 / 16, 0.1, 100);
+  const cameraHome = new THREE.Vector3(4.5, 3.1, 7.6);
+  camera.position.copy(cameraHome);
+  camera.lookAt(0, 1.05, -1.8);
+
+  let renderer: THREE.WebGLRenderer;
+  try {
+    renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: false,
+      powerPreference: 'high-performance',
+      failIfMajorPerformanceCaveat: false
+    });
+  } catch {
+    const message = '3D描画を開始できなかったよ。SafariでWebGLが有効か確認してね。';
+    callbacks.onError(message);
+    throw new Error(message);
+  }
+
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.65));
+  renderer.setSize(mount.clientWidth || 360, mount.clientHeight || 640, false);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.15;
+  renderer.domElement.className = 'scene-canvas';
+  renderer.domElement.setAttribute('aria-label', 'アニメーションする3D街並みと人物');
+  mount.appendChild(renderer.domElement);
+
+  scene.add(new THREE.HemisphereLight('#d9e8ff', '#4b4a42', 2.1));
+  const sun = new THREE.DirectionalLight('#ffe0b1', 3.1);
+  sun.position.set(-4, 9, 6);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(1024, 1024);
+  sun.shadow.camera.left = -10;
+  sun.shadow.camera.right = 10;
+  sun.shadow.camera.top = 10;
+  sun.shadow.camera.bottom = -10;
+  scene.add(sun);
+
+  const world = buildScene(scene);
+  const character = createCharacter();
+  character.root.position.set(0, 0, 1.3);
+  world.add(character.root);
+
+  const ambientParticles = new THREE.Group();
+  const particleMaterial = new THREE.MeshBasicMaterial({ color: '#f0d8ae', transparent: true, opacity: 0.48 });
+  for (let i = 0; i < 36; i++) {
+    const particle = new THREE.Mesh(new THREE.SphereGeometry(0.018 + (i % 3) * 0.008, 6, 6), particleMaterial);
+    particle.position.set(((i * 17) % 90) / 10 - 4.5, 0.5 + ((i * 13) % 45) / 10, -((i * 11) % 30));
+    ambientParticles.add(particle);
+  }
+  scene.add(ambientParticles);
+
   let playing = true;
+  let timelineTime = 0;
   let disposed = false;
-  let exportFrame = 0;
-  let modelFiles: { name: string; data: ArrayBuffer; resources?: { path: string; blob: Blob }[]; category?: string; position?: [number,number,number]; rotation?: [number,number,number]; scale?: number }[] = [];
-  let selectedModel=-1, animationPlaying=false;
-  let zipArchive:JSZip|null=null;
-  let zipCatalog:ZipAsset[]=[];
-  let importCancelled=false;
-  const assetLibrary=$('#asset-library'), categoryInput=$('#asset-category') as HTMLSelectElement;
-  const transformInputs=['#asset-x','#asset-y','#asset-z','#asset-rotation','#asset-scale'].map(s=>$(s) as HTMLInputElement);
+  const importedModels = new THREE.Group();
+  world.add(importedModels);
+  const modelRecords:{root:THREE.Group;mixer?:THREE.AnimationMixer;clips:THREE.AnimationClip[];action?:THREE.AnimationAction}[]=[];
+  let pointerDown = false;
+  let lastX = 0;
+  let lastY = 0;
+  let targetYaw = 0;
+  let currentYaw = 0;
+  let targetPitch = 0;
+  let currentPitch = 0;
+  let frameCount = 0;
+  let lastFpsTime = performance.now();
+  const clock = new THREE.Clock();
 
-  const updateTime = () => {
-    const value = Number(timeline.value);
-    $('#time-readout').textContent = `00:${String(Math.floor(value)).padStart(2, '0')}.${Math.round((value % 1) * 10)} / 00:30.0`;
+  const resize = () => {
+    const width = Math.max(1, mount.clientWidth);
+    const height = Math.max(1, mount.clientHeight);
+    renderer.setSize(width, height, false);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
   };
-  const updateCaption = () => {
-    captionPreview.textContent = caption.value;
-    captionPreview.hidden = !caption.value.trim();
+  const observer = new ResizeObserver(resize);
+  observer.observe(mount);
+  resize();
+
+  const onPointerDown = (event: PointerEvent) => {
+    if (event.pointerType === 'touch') return;
+    pointerDown = true;
+    lastX = event.clientX;
+    lastY = event.clientY;
+    renderer.domElement.setPointerCapture?.(event.pointerId);
   };
-  timeline.addEventListener('input', () => {
-    studio.setTimelineTime(Number(timeline.value));
-    updateTime();
-  });
-  $('#editor-play').addEventListener('click', () => {
-    playing = !playing;
-    studio.setPlaying(playing);
-    $('#editor-play').textContent = playing ? 'Ⅱ 一時停止' : '▶ 再生';
-  });
-  $('#editor-start').addEventListener('click', () => {
-    timeline.value = '0'; studio.setTimelineTime(0); updateTime();
-  });
-  root.querySelectorAll<HTMLButtonElement>('[data-scene]').forEach((button) => {
-    button.addEventListener('click', () => {
-      currentScene = Number(button.dataset.scene);
-      studio.setScene(currentScene);
-      root.querySelectorAll('[data-scene]').forEach((item) => item.classList.toggle('selected', item === button));
-    });
-  });
-  caption.addEventListener('input', updateCaption);
-  root.querySelectorAll<HTMLButtonElement>('[data-effect]').forEach((button) => {
-    button.addEventListener('click', () => {
-      currentEffect = button.dataset.effect ?? 'none';
-      studio.setEffect(currentEffect);
-      root.querySelectorAll('[data-effect]').forEach((item) => item.classList.toggle('active', item === button));
-    });
-  });
-  const renderCatalog=()=>{const host=$('#zip-catalog');host.innerHTML='';if(!zipCatalog.length)return;const summary=document.createElement('p');summary.className='zip-summary';summary.textContent='モデル '+zipCatalog.filter(a=>a.isModel).length+'件 / 画像 '+zipCatalog.filter(a=>a.kind==='texture').length+'件';host.append(summary);const filter=document.createElement('select');filter.className='asset-select';filter.innerHTML='<option value="all">全素材</option>'+Object.entries(categoryLabel).map(([k,v])=>'<option value="'+k+'">'+v+'</option>').join('');host.append(filter);const list=document.createElement('div');list.className='zip-catalog-list';const draw=()=>{list.innerHTML='';zipCatalog.filter(a=>filter.value==='all'||a.kind===filter.value).forEach(a=>{const row=document.createElement('label');row.className='zip-entry';const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.checked=a.selected;checkbox.disabled=!a.isModel||a.loaded;checkbox.addEventListener('change',()=>a.selected=checkbox.checked);const name=document.createElement('span');name.textContent=a.name;name.className='zip-entry-name';const tag=document.createElement('small');tag.textContent=categoryLabel[a.kind]+(a.loaded?' · 読込済':'');row.append(checkbox,name,tag);list.append(row);});};filter.addEventListener('change',draw);draw();host.append(list);refreshAssetApply();};
-  $('#zip-cancel').addEventListener('click',()=>{importCancelled=true;$('#asset-status').textContent='中止要求を受け付けたよ。';});
-  $('#zip-load-selected').addEventListener('click',async()=>{if(!zipArchive)return;const picked=zipCatalog.filter(a=>a.isModel&&a.selected&&!a.loaded);if(!picked.length){message.textContent='読み込むモデルを選択してね。';return;}importCancelled=false;const btn=$('#zip-load-selected') as HTMLButtonElement;btn.disabled=true;let success=0,fail=0;const all=Object.values(zipArchive.files);for(let n=0;n<picked.length;n++){if(importCancelled)break;const asset=picked[n];$('#asset-status').textContent='読み込み '+(n+1)+' / '+picked.length+'：'+asset.name;try{const bytes=await zipArchive.file(asset.zipPath)!.async('arraybuffer');const modelFile=new File([bytes],asset.name,{type:asset.name.toLowerCase().endsWith('.glb')?'model/gltf-binary':'model/gltf+json'});const folder=asset.zipPath.includes('/')?asset.zipPath.slice(0,asset.zipPath.lastIndexOf('/')+1):'';let refs:string[]=[];if(asset.zipPath.toLowerCase().endsWith('.gltf')){const json=JSON.parse(new TextDecoder().decode(bytes));refs=(json.buffers||[]).concat(json.images||[]).map((x:any)=>x.uri).filter((x:string)=>x&&!x.startsWith('data:'));}const paths=refs.length?refs.map(p=>folder+p):all.filter(x=>folder&&x.name.startsWith(folder)&&/\.(png|jpe?g|webp|bin|ktx2)$/i.test(x.name)).map(x=>x.name);const resources=new Map<string,Blob>(),savedResources:{path:string;blob:Blob}[]=[];for(const path of paths){const blob=await zipArchive.file(path)?.async('blob');if(blob){resources.set(path,blob);resources.set(path.slice(folder.length),blob);resources.set(path.split('/').pop()!,blob);savedResources.push({path,blob});}}const cat=asset.kind;await studio.loadModel(modelFile,resources.size?resources:undefined,cat);modelFiles.push({name:modelFile.name,data:bytes,resources:savedResources,category:cat,position:[0,0,0],rotation:[0,0,0],scale:1});asset.loaded=true;success++;renderLibrary();}catch(err){fail++;message.textContent='読み込み失敗 '+asset.name+'：'+(err instanceof Error?err.message:'');}renderCatalog();}selectedModel=modelFiles.length?modelFiles.length-1:-1;selectAsset(selectedModel);btn.disabled=false;$('#asset-status').textContent=(importCancelled?'中止':'完了')+'：成功 '+success+' / 失敗 '+fail;});
-  const refreshAssetApply=()=>{const target=$('#asset-target') as HTMLSelectElement;target.innerHTML=modelFiles.map((m,i)=>'<option value="'+i+'">'+m.name+'</option>').join('');const textures=$('#texture-source') as HTMLSelectElement;textures.innerHTML=zipCatalog.filter(a=>a.kind==='texture').map(a=>'<option value="'+a.zipPath+'">'+a.name+'</option>').join('');};
-  $('#asset-attach').addEventListener('click',()=>{if(selectedModel<0){message.textContent='取り付けるモデルを選んでね。';return;}const target=+($('#asset-target') as HTMLSelectElement).value;const slot=($('#asset-slot') as HTMLSelectElement).value;if(target===selectedModel){message.textContent='取り付け元と対象を別々に選んでね。';return;}studio.attachModel(selectedModel,target,slot);modelFiles[selectedModel].attachedTo=target;modelFiles[selectedModel].attachSlot=slot;message.textContent='モデルを取り付けたよ。';});
-  $('#texture-apply').addEventListener('click',async()=>{if(!zipArchive||selectedModel<0){message.textContent='テクスチャと適用先モデルを選んでね。';return;}try{const blob=await zipArchive.file(($('#texture-source') as HTMLSelectElement).value)?.async('blob');if(blob)studio.applyTexture(selectedModel,blob);}catch(err){message.textContent='テクスチャ適用に失敗したよ。';}});
-  const renderLibrary=()=>{assetLibrary.innerHTML='';modelFiles.forEach((m,i)=>{const row=document.createElement('div');row.className='asset-row'+(i===selectedModel?' selected':'');row.innerHTML='<button class="asset-select-row"><b></b><small></small></button><button class="asset-visibility" type="button">◉</button><button class="asset-remove">×</button>';row.querySelector('b')!.textContent=m.name;row.querySelector('small')!.textContent=({character:'キャラクター',building:'建物',prop:'小物',nature:'自然',other:'その他'} as Record<string,string>)[m.category??'other'];row.querySelector('.asset-select-row')!.addEventListener('click',()=>selectAsset(i));row.querySelector('.asset-visibility')!.addEventListener('click',()=>{const visible=(m as any).visible!==false;(m as any).visible=!visible;studio.setModelVisible(i,!visible);row.classList.toggle('asset-hidden',visible);});row.querySelector('.asset-remove')!.addEventListener('click',()=>{studio.removeModel(i);modelFiles.splice(i,1);selectedModel=modelFiles.length?Math.min(i,modelFiles.length-1):-1;renderLibrary();selectAsset(selectedModel);});assetLibrary.append(row);});refreshAssetApply();};
-  const selectAsset=(i:number)=>{selectedModel=i;renderLibrary();const m=modelFiles[i];transformInputs.forEach(x=>x.disabled=!m);if(!m){($('#asset-animation') as HTMLSelectElement).innerHTML='<option value="-1">なし</option>';return;}categoryInput.value=m.category??'other';const p=m.position??[0,0,0],r=m.rotation??[0,0,0],scale=m.scale??1;[p[0],p[1],p[2],r[1]*180/Math.PI,scale].forEach((v,j)=>transformInputs[j].value=String(v));const sel=$('#asset-animation') as HTMLSelectElement;sel.innerHTML='<option value="-1">なし</option>';studio.getModelAnimations(i).forEach((name,j)=>{const o=document.createElement('option');o.value=String(j);o.textContent=name;sel.append(o);});};
-  const applyTransform=()=>{if(selectedModel<0)return;const m=modelFiles[selectedModel];m.position=[+transformInputs[0].value,+transformInputs[1].value,+transformInputs[2].value];m.rotation=[0,+transformInputs[3].value*Math.PI/180,0];m.scale=+transformInputs[4].value;studio.setModelTransform(selectedModel,m.position,m.rotation,m.scale);};
-  transformInputs.forEach(x=>x.addEventListener('input',applyTransform));categoryInput.addEventListener('change',()=>{if(selectedModel>=0){modelFiles[selectedModel].category=categoryInput.value;renderLibrary();}});
-  $('#asset-animation').addEventListener('change',()=>{if(selectedModel>=0)studio.setModelAnimation(selectedModel,+($('#asset-animation') as HTMLSelectElement).value);});
-  $('#asset-anim-play').addEventListener('click',()=>{if(selectedModel<0)return;animationPlaying=!animationPlaying;studio.setModelAnimationPlaying(selectedModel,animationPlaying);$('#asset-anim-play').textContent=animationPlaying?'アニメーション停止':'アニメーション再生';});
-  $('#model-file').addEventListener('change', async event => {
-    const input = event.currentTarget as HTMLInputElement;
-    const file = input.files?.[0];
-    if (!file) return;
-    const category = categoryInput.value;
-    try {
-      if (file.name.toLowerCase().endsWith('.zip')) {
-        $('#asset-status').textContent='ZIPをカタログ化中...';
-        if(file.size>500*1024*1024)throw new Error('ZIPが500MBを超えているため停止したよ。');
-        const zip=await JSZip.loadAsync(file,{checkCRC32:false});
-        const entries=Object.values(zip.files).filter(a=>!a.dir&&!a.name.startsWith('__MACOSX/')&&!a.name.split('/').pop()?.startsWith('.'));
-        const models=entries.filter(a=>/\.(glb|gltf)$/i.test(a.name));
-        if(!models.length)throw new Error('ZIP内にGLB/glTFモデルが見つからなかったよ。');
-        zipArchive=zip;
-        zipCatalog=entries.map(a=>{const name=a.name.split('/').pop()||a.name;const isModel=/\.(glb|gltf)$/i.test(a.name);const kind=classifyAsset(a.name);return{path:a.name,name,kind,selected:isModel&&['character','building','nature','prop'].includes(kind),loaded:false,zipPath:a.name,isModel};});
-        renderCatalog();
-        $('#asset-status').textContent='ZIPカタログ作成完了：モデル '+models.length+'件。';
-        message.textContent='必要なモデルを選んで読み込んでね。';
-      } else {
-        const bytes = await file.arrayBuffer();
-        await studio.loadModel(file, undefined, category);
-        modelFiles.push({ name: file.name, data: bytes, category, position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 });
-        selectedModel = modelFiles.length - 1;
-        renderLibrary(); selectAsset(selectedModel);
-        $('#asset-status').textContent = '素材登録：' + file.name;
-        message.textContent = 'モデルを素材ライブラリに追加したよ。';
-      }
-    } catch (err) {
-      $('#asset-status').textContent = 'ZIP / モデルの読み込みに失敗';
-      message.textContent = err instanceof Error ? '読み込み失敗：' + err.message : '読み込み失敗';
-    } finally { input.value = ''; }
-  });
-  $('#clear-models').addEventListener('click', () => {
-    studio.clearImportedModels(); modelFiles = [];
-    $('#asset-status').textContent = '読み込んだモデルはありません。';
-  });
+  const onPointerMove = (event: PointerEvent) => {
+    if (!pointerDown || event.pointerType === 'touch') return;
+    targetYaw = THREE.MathUtils.clamp(targetYaw + (event.clientX - lastX) * 0.006, -0.72, 0.72);
+    targetPitch = THREE.MathUtils.clamp(targetPitch + (event.clientY - lastY) * 0.004, -0.42, 0.42);
+    lastX = event.clientX;
+    lastY = event.clientY;
+  };
+  const onPointerUp = () => { pointerDown = false; };
 
-  const snapshot = (): ProjectData => ({
-    version: 1, duration: 30, caption: caption.value, effect: currentEffect,
-    scene: currentScene, models: modelFiles
-  });
-  $('#save-project').addEventListener('click', async () => {
-    try { await saveProject(snapshot()); message.textContent = 'プロジェクトをこのiPhoneに保存したよ。'; }
-    catch { message.textContent = '保存できなかったよ。空き容量とSafariの設定を確認してね。'; }
-  });
+  // Handle iPhone touch gestures directly on the 3D canvas. Prevent the
+  // browser's default page scrolling only for touches that start here.
+  const onTouchStart = (event: TouchEvent) => {
+    if (event.cancelable) event.preventDefault();
+    const touch = event.changedTouches[0];
+    if (!touch) return;
+    pointerDown = true;
+    lastX = touch.clientX;
+    lastY = touch.clientY;
+  };
+  const onTouchMove = (event: TouchEvent) => {
+    if (!pointerDown) return;
+    if (event.cancelable) event.preventDefault();
+    const touch = event.touches[0];
+    if (!touch) return;
+    targetYaw = THREE.MathUtils.clamp(targetYaw + (touch.clientX - lastX) * 0.006, -0.72, 0.72);
+    targetPitch = THREE.MathUtils.clamp(targetPitch + (touch.clientY - lastY) * 0.004, -0.42, 0.42);
+    lastX = touch.clientX;
+    lastY = touch.clientY;
+  };
+  const onTouchEnd = (event: TouchEvent) => {
+    if (event.cancelable) event.preventDefault();
+    pointerDown = false;
+  };
 
-  void readProject().then(async (saved) => {
-    if (!saved || disposed) return;
-    caption.value = saved.caption ?? '';
-    currentEffect = saved.effect ?? 'none';
-    currentScene = saved.scene ?? 0;
-    studio.setScene(currentScene); studio.setEffect(currentEffect);
-    root.querySelectorAll<HTMLButtonElement>('[data-scene]').forEach((item) => item.classList.toggle('selected', Number(item.dataset.scene) === currentScene));
-    root.querySelectorAll<HTMLButtonElement>('[data-effect]').forEach((item) => item.classList.toggle('active', item.dataset.effect === currentEffect));
-    for (const model of saved.models ?? []) {
-      try {
-        const resources = new Map<string, Blob>();
-        for (const resource of model.resources ?? []) {
-          resources.set(resource.path, resource.blob);
-          const tail = resource.path.split('/').pop();
-          if (tail) resources.set(tail, resource.blob);
+  renderer.domElement.addEventListener('pointerdown', onPointerDown);
+  renderer.domElement.addEventListener('pointermove', onPointerMove);
+  renderer.domElement.addEventListener('pointerup', onPointerUp);
+  renderer.domElement.addEventListener('pointercancel', onPointerUp);
+  renderer.domElement.addEventListener('touchstart', onTouchStart, { passive: false });
+  renderer.domElement.addEventListener('touchmove', onTouchMove, { passive: false });
+  renderer.domElement.addEventListener('touchend', onTouchEnd, { passive: false });
+  renderer.domElement.addEventListener('touchcancel', onTouchEnd, { passive: false });
+
+  const render = () => {
+    if (disposed) return;
+    const delta = Math.min(clock.getDelta(), 0.05);
+    if (playing) timelineTime = Math.min(30, timelineTime + delta);
+    const elapsed = timelineTime;
+    currentYaw = THREE.MathUtils.lerp(currentYaw, targetYaw, 0.055);
+    currentPitch = THREE.MathUtils.lerp(currentPitch, targetPitch, 0.055);
+    camera.position.x = cameraHome.x + currentYaw * 5.5;
+    camera.position.y = cameraHome.y + currentPitch * 3.5;
+    camera.lookAt(Math.sin(currentYaw) * 1.8, 1.05 + currentPitch * 1.2, -1.8);
+    character.animate(elapsed, playing);
+    modelRecords.forEach(record=>record.mixer?.update(delta));
+    ambientParticles.position.y = Math.sin(elapsed * 0.35) * 0.12;
+    renderer.render(scene, camera);
+    frameCount++;
+    const now = performance.now();
+    if (now - lastFpsTime >= 1000) {
+      callbacks.onFps(Math.round((frameCount * 1000) / (now - lastFpsTime)));
+      frameCount = 0;
+      lastFpsTime = now;
+    }
+    void delta;
+    renderer.setAnimationLoop(render);
+  };
+
+  try {
+    renderer.render(scene, camera);
+    callbacks.onReady();
+    renderer.setAnimationLoop(render);
+  } catch {
+    const message = 'シーンの描画中にエラーが発生したよ。ページを再読み込みしてみてね。';
+    callbacks.onError(message);
+    throw new Error(message);
+  }
+
+  return {
+    togglePlayback: () => {
+      playing = !playing;
+      return playing;
+    },
+    setTimelineTime: (seconds: number) => { timelineTime = THREE.MathUtils.clamp(seconds, 0, 30); },
+    getTimelineTime: () => timelineTime,
+    setPlaying: (value: boolean) => { playing = value; },
+    setScene: (index: number) => {
+      const presets = [
+        { camera: [4.5, 3.1, 7.6] as [number, number, number], color: '#101923' },
+        { camera: [-5.8, 2.8, 5.2] as [number, number, number], color: '#19202c' },
+        { camera: [0.5, 5.2, 9.5] as [number, number, number], color: '#20202a' }
+      ];
+      const preset = presets[((index % presets.length) + presets.length) % presets.length];
+      cameraHome.set(...preset.camera);
+      scene.background = new THREE.Color(preset.color);
+      scene.fog = new THREE.Fog(preset.color, 12, 34);
+      targetYaw = 0; targetPitch = 0;
+    },
+    setEffect: (effect: string) => {
+      const exposures: Record<string, number> = { none: 1.15, warm: 1.38, cool: 0.98, noir: 0.82, dreamy: 1.55 };
+      renderer.toneMappingExposure = exposures[effect] ?? 1.15;
+      const colors: Record<string, string> = { none: '#101923', warm: '#211b18', cool: '#101b28', noir: '#090b10', dreamy: '#252034' };
+      scene.background = new THREE.Color(colors[effect] ?? colors.none);
+      scene.fog = new THREE.Fog(colors[effect] ?? colors.none, 12, 34);
+    },
+    loadModel:async(file,resources,category='other')=>{const urls:string[]=[];const manager=new THREE.LoadingManager();if(resources?.size)manager.setURLModifier(url=>{const tail=decodeURIComponent(url).split('/').pop()??url;const blob=resources.get(url)??resources.get(tail);if(blob){const u=URL.createObjectURL(blob);urls.push(u);return u;}return url;});const loader=new GLTFLoader(manager);const data=await file.arrayBuffer();const gltf=await new Promise<{scene:THREE.Group;animations:THREE.AnimationClip[]}>( (resolve,reject)=>loader.parse(data,'',resolve,reject));urls.forEach(url=>URL.revokeObjectURL(url));const root=new THREE.Group();root.name=file.name;root.userData.category=category;const model=gltf.scene;root.add(model);const bounds=new THREE.Box3().setFromObject(model),size=bounds.getSize(new THREE.Vector3()),max=Math.max(size.x,size.y,size.z)||1;model.scale.setScalar(2.2/max);const scaled=new THREE.Box3().setFromObject(model);model.position.y-=scaled.min.y;root.position.x=(modelRecords.length%3-1)*1.1;root.position.z=.8;importedModels.add(root);modelRecords.push({root,mixer:gltf.animations.length?new THREE.AnimationMixer(model):undefined,clips:gltf.animations});},
+    setModelTransform:(i,p,r,scale)=>{const rec=modelRecords[i];if(rec){rec.root.position.set(...p);rec.root.rotation.set(...r);rec.root.scale.setScalar(scale);}},
+    removeModel:i=>{const rec=modelRecords[i];if(!rec)return;rec.mixer?.stopAllAction();rec.root.parent?.remove(rec.root);rec.root.traverse(o=>{if(o instanceof THREE.Mesh){o.geometry.dispose();const mats=Array.isArray(o.material)?o.material:[o.material];mats.forEach(m=>m.dispose());}});modelRecords.splice(i,1);},
+    getModelAnimations:i=>modelRecords[i]?.clips.map(c=>c.name||'Animation')??[],
+    setModelAnimation:(i,clipIndex)=>{const rec=modelRecords[i];if(!rec?.mixer)return;rec.action?.stop();rec.action=clipIndex>=0?rec.mixer.clipAction(rec.clips[clipIndex]):undefined;rec.action?.reset().play();},
+    setModelAnimationPlaying:(i,value)=>{const rec=modelRecords[i];if(rec?.action)rec.action.paused=!value;},
+    clearImportedModels:()=>{for(let i=modelRecords.length-1;i>=0;i--){const rec=modelRecords[i];rec.mixer?.stopAllAction();importedModels.remove(rec.root);rec.root.traverse(o=>{if(o instanceof THREE.Mesh){o.geometry.dispose();const mats=Array.isArray(o.material)?o.material:[o.material];mats.forEach(m=>m.dispose());}});}modelRecords.length=0;},
+    resetCamera: () => { targetYaw = 0; targetPitch = 0; },
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      observer.disconnect();
+      renderer.setAnimationLoop(null);
+      renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      renderer.domElement.removeEventListener('pointermove', onPointerMove);
+      renderer.domElement.removeEventListener('pointerup', onPointerUp);
+      renderer.domElement.removeEventListener('pointercancel', onPointerUp);
+      renderer.domElement.removeEventListener('touchstart', onTouchStart);
+      renderer.domElement.removeEventListener('touchmove', onTouchMove);
+      renderer.domElement.removeEventListener('touchend', onTouchEnd);
+      renderer.domElement.removeEventListener('touchcancel', onTouchEnd);
+      scene.traverse((object) => {
+        if (object instanceof THREE.Mesh) {
+          object.geometry.dispose();
+          const materials = Array.isArray(object.material) ? object.material : [object.material];
+          materials.forEach((material) => material.dispose());
         }
-        await studio.loadModel(new File([model.data], model.name), resources.size ? resources : undefined, model.category ?? 'other');
-        modelFiles.push(model);const restoredIndex=modelFiles.length-1;if(model.visible===false)studio.setModelVisible(restoredIndex,false);if(typeof model.attachedTo==='number'&&model.attachedTo!==restoredIndex&&model.attachedTo<modelFiles.length)studio.attachModel(restoredIndex,model.attachedTo,model.attachSlot??'head');
-      } catch { /* Keep the rest of the project usable if one asset is invalid. */ }
+      });
+      renderer.dispose();
+      renderer.domElement.remove();
     }
-    updateCaption();
-    message.textContent = '前回のプロジェクトを復元したよ。';
-  }).catch(() => { message.textContent = '保存済みプロジェクトを読み込めなかったよ。'; });
-
-  $('#export-video').addEventListener('click', async () => {
-    const button = $('#export-video') as HTMLButtonElement;
-    if (!('MediaRecorder' in window) || !HTMLCanvasElement.prototype.captureStream) {
-      message.textContent = 'このブラウザは動画録画に対応していないため、MP4を書き出せないよ。';
-      return;
-    }
-    const mimeType = ['video/mp4;codecs=avc1.42E01E', 'video/mp4'].find((type) => MediaRecorder.isTypeSupported(type));
-    if (!mimeType) {
-      message.textContent = 'このiPhoneのSafariがMP4録画に対応していないみたい。別形式へ偽装せず停止したよ。';
-      return;
-    }
-    const source = root.closest('.shell')?.querySelector<HTMLCanvasElement>('.scene-canvas');
-    if (!source) { message.textContent = '3Dプレビューが見つからないよ。'; return; }
-    button.disabled = true;
-    message.textContent = '30秒の動画をリアルタイムで録画中。アプリを閉じずに待ってね。';
-    studio.setTimelineTime(0); timeline.value = '0'; updateTime(); studio.setPlaying(true);
-    playing = true;
-    const output = document.createElement('canvas');
-    output.width = 720; output.height = 1280;
-    const context = output.getContext('2d');
-    if (!context) { button.disabled = false; message.textContent = '動画用キャンバスを作れなかったよ。'; return; }
-    const stream = output.captureStream(30);
-    const chunks: BlobPart[] = [];
-    let recorder: MediaRecorder;
-    try { recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 5_000_000 }); }
-    catch { stream.getTracks().forEach((track) => track.stop()); button.disabled = false; message.textContent = 'MP4録画を開始できなかったよ。'; return; }
-    recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
-    recorder.onerror = () => { message.textContent = '録画中にエラーが発生したよ。'; button.disabled = false; stream.getTracks().forEach((track) => track.stop()); };
-    recorder.onstop = () => {
-      cancelAnimationFrame(exportFrame);
-      stream.getTracks().forEach((track) => track.stop());
-      const blob = new Blob(chunks, { type: 'video/mp4' });
-      if (!blob.size) { message.textContent = '動画データが空だったため保存できなかったよ。'; button.disabled = false; return; }
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url; link.download = '3d-shorts-30sec.mp4'; link.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      message.textContent = `MP4を書き出したよ（${(blob.size / 1024 / 1024).toFixed(1)} MB）。ファイルアプリを確認してね。`;
-      button.disabled = false;
-    };
-    const draw = () => {
-      context.drawImage(source, 0, 0, 720, 1280);
-      if (caption.value.trim()) {
-        context.font = 'bold 42px -apple-system, sans-serif';
-        context.textAlign = 'center'; context.textBaseline = 'middle';
-        const text = caption.value.slice(0, 38);
-        const y = 1120;
-        context.lineWidth = 8; context.strokeStyle = 'rgba(0,0,0,.72)'; context.strokeText(text, 360, y, 650);
-        context.fillStyle = '#ffffff'; context.fillText(text, 360, y, 650);
-      }
-      exportFrame = requestAnimationFrame(draw);
-    };
-    draw();
-    recorder.start(1000);
-    window.setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, 30_000);
-  });
-
-  renderLibrary(); selectAsset(-1); updateCaption(); updateTime();
-  return () => { disposed = true; cancelAnimationFrame(exportFrame); };
+  };
 }
