@@ -233,7 +233,7 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
         }
         studio.setScene(model.sceneIndex??currentScene);
         await studio.loadModel(new File([model.data], model.name), resources.size ? resources : undefined, model.category ?? 'other');
-        modelFiles.push({...model,sceneIndex:model.sceneIndex??currentScene});const restoredIndex=modelFiles.length-1;studio.setModelScene(restoredIndex,modelFiles[restoredIndex].sceneIndex??0;if(model.visible===false)studio.setModelVisible(restoredIndex,false);if(model.textureBlob)studio.applyTexture(restoredIndex,model.textureBlob);if(typeof model.attachedTo==='number'&&model.attachedTo!==restoredIndex&&model.attachedTo<modelFiles.length)studio.attachModel(restoredIndex,model.attachedTo,model.attachSlot??'head');
+        modelFiles.push({...model,sceneIndex:model.sceneIndex??currentScene});const restoredIndex=modelFiles.length-1;studio.setModelScene(restoredIndex,modelFiles[restoredIndex].sceneIndex??0);if(model.visible===false)studio.setModelVisible(restoredIndex,false);if(model.textureBlob)studio.applyTexture(restoredIndex,model.textureBlob);if(typeof model.attachedTo==='number'&&model.attachedTo!==restoredIndex&&model.attachedTo<modelFiles.length)studio.attachModel(restoredIndex,model.attachedTo,model.attachSlot??'head');
       } catch { /* Keep the rest of the project usable if one asset is invalid. */ }
     }
     updateCaption();
