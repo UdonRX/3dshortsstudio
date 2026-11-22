@@ -97,7 +97,10 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
   let playing = true;
   let disposed = false;
   let exportFrame = 0;
-  let modelFiles: { name: string; data: ArrayBuffer; category?: string; position?: [number,number,number]; rotation?: [number,number,number]; scale?: number }[] = [];\n  let selectedModel=-1, animationPlaying=false;\n  const assetLibrary=$('#asset-library'), categoryInput=$('#asset-category') as HTMLSelectElement;\n  const transformInputs=['#asset-x','#asset-y','#asset-z','#asset-rotation','#asset-scale'].map(s=>$(s) as HTMLInputElement);
+  let modelFiles: { name: string; data: ArrayBuffer; category?: string; position?: [number,number,number]; rotation?: [number,number,number]; scale?: number }[] = [];
+  let selectedModel=-1, animationPlaying=false;
+  const assetLibrary=$('#asset-library'), categoryInput=$('#asset-category') as HTMLSelectElement;
+  const transformInputs=['#asset-x','#asset-y','#asset-z','#asset-rotation','#asset-scale'].map(s=>$(s) as HTMLInputElement);
 
   const updateTime = () => {
     const value = Number(timeline.value);

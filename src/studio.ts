@@ -16,8 +16,9 @@ export type StudioController = {
   setPlaying: (playing: boolean) => void;
   setScene: (index: number) => void;
   setEffect: (effect: string) => void;
-  loadModel: (file: File) => Promise<void>;
-  clearImportedModels: () => void;
+  loadModel: (file: File, resources?: Map<string,Blob>, category?: string) => Promise<void>;
+  setModelTransform:(index:number,position:[number,number,number],rotation:[number,number,number],scale:number)=>void;
+  removeModel:(index:number)=>void; getModelAnimations:(index:number)=>string[]; setModelAnimation:(index:number,clipIndex:number)=>void; setModelAnimationPlaying:(index:number,playing:boolean)=>void; clearImportedModels: () => void;
 };
 
 function makeMaterial(color: THREE.ColorRepresentation, roughness = 0.82): THREE.MeshStandardMaterial {
