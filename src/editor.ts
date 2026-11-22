@@ -1,4 +1,5 @@
 import type { StudioController } from './studio';
+import JSZip from 'jszip';
 
 type ProjectData = {
   version: 1;
@@ -6,7 +7,7 @@ type ProjectData = {
   caption: string;
   effect: string;
   scene: number;
-  models: { name: string; data: ArrayBuffer }[];
+  models: { name: string; data: ArrayBuffer; category?: string; position?: [number,number,number]; rotation?: [number,number,number]; scale?: number }[];
 };
 
 const DB_NAME = '3d-shorts-studio';
@@ -75,9 +76,8 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
     <div class="editor-block">
       <div class="editor-label"><b>3D ASSET LIBRARY</b><span>GLB / glTF</span></div>
       <label class="upload-button" for="model-file">＋ 3Dモデルを読み込む</label>
-      <input id="model-file" type="file" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" hidden>
-      <p id="asset-status" class="field-note">GLB推奨。外部テクスチャを参照するglTFは読み込めない場合があるよ。</p>
-      <button id="clear-models" class="text-button" type="button">読み込んだモデルをすべて外す</button>
+      <input id="model-file" type="file" accept=".glb,.gltf,.zip,model/gltf-binary,model/gltf+json,application/zip" hidden>
+      <p id="asset-status" class="field-note">ZIP / GLB / glTFを読み込み、素材ライブラリに保存するよ。</p><div id="asset-library" class="asset-library"></div><div class="asset-tools"><label class="asset-label">カテゴリ<select id="asset-category" class="asset-select"><option value="character">キャラクター</option><option value="building">建物</option><option value="prop">小物</option><option value="nature">自然</option><option value="other">その他</option></select></label><label class="asset-label">大きさ<input id="asset-scale" type="range" min="0.1" max="5" step="0.1" value="1"></label><div class="asset-transform"><label>位置 X<input id="asset-x" type="range" min="-5" max="5" step="0.1" value="0"></label><label>位置 Y<input id="asset-y" type="range" min="0" max="5" step="0.1" value="0"></label><label>位置 Z<input id="asset-z" type="range" min="-10" max="10" step="0.1" value="0"></label></div><div class="asset-transform"><label>回転 Y<input id="asset-rotation" type="range" min="-180" max="180" step="5" value="0"></label></div><div class="asset-animation"><label>アニメーション<select id="asset-animation" class="asset-select"><option value="-1">なし</option></select></label><button id="asset-anim-play" class="action-button" type="button">アニメーション再生</button></div></div><button id="clear-models" class="text-button" type="button">読み込んだモデルをすべて外す</button>
     </div>
     <div class="editor-footer">
       <button id="save-project" class="action-button" type="button">プロジェクトを保存</button>
@@ -97,7 +97,7 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
   let playing = true;
   let disposed = false;
   let exportFrame = 0;
-  let modelFiles: { name: string; data: ArrayBuffer }[] = [];
+  let modelFiles: { name: string; data: ArrayBuffer; category?: string; position?: [number,number,number]; rotation?: [number,number,number]; scale?: number }[] = [];\n  let selectedModel=-1, animationPlaying=false;\n  const assetLibrary=$('#asset-library'), categoryInput=$('#asset-category') as HTMLSelectElement;\n  const transformInputs=['#asset-x','#asset-y','#asset-z','#asset-rotation','#asset-scale'].map(s=>$(s) as HTMLInputElement);
 
   const updateTime = () => {
     const value = Number(timeline.value);
@@ -134,18 +134,13 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
       root.querySelectorAll('[data-effect]').forEach((item) => item.classList.toggle('active', item === button));
     });
   });
-  $('#model-file').addEventListener('change', async (event) => {
-    const file = (event.currentTarget as HTMLInputElement).files?.[0];
-    if (!file) return;
-    try {
-      await studio.loadModel(file);
-      modelFiles.push({ name: file.name, data: await file.arrayBuffer() });
-      $('#asset-status').textContent = `読み込み済み：${file.name}`;
-      message.textContent = '3Dモデルをシーンに追加したよ。';
-    } catch (error) {
-      message.textContent = error instanceof Error ? `読み込み失敗：${error.message}` : 'モデルを読み込めなかったよ。';
-    }
-  });
+  const renderLibrary=()=>{assetLibrary.innerHTML='';modelFiles.forEach((m,i)=>{const row=document.createElement('div');row.className='asset-row'+(i===selectedModel?' selected':'');row.innerHTML='<button class="asset-select-row"><b></b><small></small></button><button class="asset-remove">×</button>';row.querySelector('b')!.textContent=m.name;row.querySelector('small')!.textContent=({character:'キャラクター',building:'建物',prop:'小物',nature:'自然',other:'その他'} as Record<string,string>)[m.category??'other'];row.querySelector('.asset-select-row')!.addEventListener('click',()=>selectAsset(i));row.querySelector('.asset-remove')!.addEventListener('click',()=>{studio.removeModel(i);modelFiles.splice(i,1);selectedModel=modelFiles.length?Math.min(i,modelFiles.length-1):-1;renderLibrary();selectAsset(selectedModel);});assetLibrary.append(row);});};
+  const selectAsset=(i:number)=>{selectedModel=i;renderLibrary();const m=modelFiles[i];transformInputs.forEach(x=>x.disabled=!m);if(!m){($('#asset-animation') as HTMLSelectElement).innerHTML='<option value="-1">なし</option>';return;}categoryInput.value=m.category??'other';const p=m.position??[0,0,0],r=m.rotation??[0,0,0],scale=m.scale??1;[p[0],p[1],p[2],r[1]*180/Math.PI,scale].forEach((v,j)=>transformInputs[j].value=String(v));const sel=$('#asset-animation') as HTMLSelectElement;sel.innerHTML='<option value="-1">なし</option>';studio.getModelAnimations(i).forEach((name,j)=>{const o=document.createElement('option');o.value=String(j);o.textContent=name;sel.append(o);});};
+  const applyTransform=()=>{if(selectedModel<0)return;const m=modelFiles[selectedModel];m.position=[+transformInputs[0].value,+transformInputs[1].value,+transformInputs[2].value];m.rotation=[0,+transformInputs[3].value*Math.PI/180,0];m.scale=+transformInputs[4].value;studio.setModelTransform(selectedModel,m.position,m.rotation,m.scale);};
+  transformInputs.forEach(x=>x.addEventListener('input',applyTransform));categoryInput.addEventListener('change',()=>{if(selectedModel>=0){modelFiles[selectedModel].category=categoryInput.value;renderLibrary();}});
+  $('#asset-animation').addEventListener('change',()=>{if(selectedModel>=0)studio.setModelAnimation(selectedModel,+($('#asset-animation') as HTMLSelectElement).value);});
+  $('#asset-anim-play').addEventListener('click',()=>{if(selectedModel<0)return;animationPlaying=!animationPlaying;studio.setModelAnimationPlaying(selectedModel,animationPlaying);$('#asset-anim-play').textContent=animationPlaying?'アニメーション停止':'アニメーション再生';});
+  $('#model-file').addEventListener('change',async event=>{const input=event.currentTarget as HTMLInputElement,file=input.files?.[0];if(!file)return;try{let modelFile=file,resources:Map<string,Blob>|undefined;if(file.name.toLowerCase().endsWith('.zip')){const zip=await JSZip.loadAsync(file);const entries=Object.values(zip.files).filter(x=>!x.dir);const entry=entries.find(x=>x.name.toLowerCase().endsWith('.glb'))??entries.find(x=>x.name.toLowerCase().endsWith('.gltf'));if(!entry)throw new Error('ZIP内にGLB/glTFがないよ');modelFile=new File([await entry.async('arraybuffer')],entry.name.split('/').pop()??entry.name);resources=new Map();for(const item of entries){if(item===entry)continue;const blob=await item.async('blob');resources.set(item.name,blob);resources.set(item.name.split('/').pop()!,blob);}}const category=categoryInput.value;await studio.loadModel(modelFile,resources,category);modelFiles.push({name:modelFile.name,data:await modelFile.arrayBuffer(),category,position:[0,0,0],rotation:[0,0,0],scale:1});selectedModel=modelFiles.length-1;renderLibrary();selectAsset(selectedModel);$('#asset-status').textContent='素材登録：'+modelFile.name;message.textContent='モデルを素材ライブラリに追加したよ。';}catch(err){message.textContent=err instanceof Error?'読み込み失敗：'+err.message:'読み込み失敗';}input.value='';});
   $('#clear-models').addEventListener('click', () => {
     studio.clearImportedModels(); modelFiles = [];
     $('#asset-status').textContent = '読み込んだモデルはありません。';
@@ -235,6 +230,6 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
     window.setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, 30_000);
   });
 
-  updateCaption(); updateTime();
+  renderLibrary(); selectAsset(-1); updateCaption(); updateTime();
   return () => { disposed = true; cancelAnimationFrame(exportFrame); };
 }
