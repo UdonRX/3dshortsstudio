@@ -102,7 +102,7 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
   let playing = true;
   let disposed = false;
   let exportFrame = 0;
-  let modelFiles: { name: string; data: ArrayBuffer; resources?: { path: string; blob: Blob }[]; category?: string; position?: [number,number,number]; rotation?: [number,number,number]; scale?: number }[] = [];
+  let modelFiles: { name: string; data: ArrayBuffer; resources?: { path: string; blob: Blob }[]; category?: string; position?: [number,number,number]; rotation?: [number,number,number]; scale?: number; visible?: boolean; attachedTo?: number; attachSlot?: string }[] = [];
   let selectedModel=-1, animationPlaying=false;
   let zipArchive:JSZip|null=null;
   let zipCatalog:ZipAsset[]=[];
