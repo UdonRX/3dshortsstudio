@@ -3,7 +3,7 @@ import JSZip from 'jszip';
 type AssetKind='character'|'hair'|'face'|'clothing'|'prop'|'building'|'nature'|'texture'|'other';
 type ZipAsset={path:string;name:string;kind:AssetKind;selected:boolean;loaded:boolean;zipPath:string;isModel:boolean};
 const categoryLabel:Record<AssetKind,string>={character:'キャラクター',hair:'髪',face:'顔',clothing:'服・装備',prop:'小物',building:'建物',nature:'自然',texture:'テクスチャ',other:'未分類'};
-function classifyAsset(path:string):AssetKind{const s=path.toLowerCase();if(/\.(png|jpe?g|webp|bmp|tga)$/i.test(s))return'texture';if(/hair|hairstyle|髪/.test(s))return'hair';if(/face|head|skin|顔/.test(s))return'face';if(/cloth|shirt|pants|dress|armor|outfit|衣装|服/.test(s))return'clothing';if(/character|female|male|body|humanoid|person|全身/.test(s))return'character';if(/weapon|accessory|prop|item|gun|sword|bag|小物|装備/.test(s))return'prop';if(/building|house|architecture|建物/.test(s))return'building';if(/tree|plant|grass|flower|nature|自然/.test(s))return'nature';return'other';}
+function classifyAsset(path:string):AssetKind{const s=path.toLowerCase();if(/\.(png|jpe?g|webp|bmp|tga|hdr)$/i.test(s))return'texture';if(/hair|hairstyle|髪/.test(s))return'hair';if(/face|head|skin|顔/.test(s))return'face';if(/cloth|shirt|pants|dress|armor|outfit|衣装|服/.test(s))return'clothing';if(/character|female|male|body|humanoid|person|全身/.test(s))return'character';if(/building|house|architecture|brick|wall|roof|window|door|trim|column|floor|stairs|facade|city|urban|street|sidewalk|pavement|建物|街|道路|壁|窓|屋根/.test(s))return'building';if(/tree|plant|grass|flower|nature|自然/.test(s))return'nature';if(/weapon|accessory|prop|item|gun|sword|bag|furniture|chair|table|lamp|sofa|cabinet|bed|小物|装備|家具/.test(s))return'prop';return'other';}
 
 
 type ProjectData = {
@@ -165,13 +165,13 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
     try {
       if (file.name.toLowerCase().endsWith('.zip')) {
         $('#asset-status').textContent='ZIPをカタログ化中...';
-        if(file.size>200*1024*1024)throw new Error('ZIPが200MBを超えているため、iPhoneのメモリ保護のため停止したよ。200MB以下に分割して読み込んでね。');
+        if(file.size>350*1024*1024)throw new Error('ZIPが350MBを超えているため、iPhoneのメモリ保護のため停止したよ。サイズを分割して読み込んでね。');
         const zip=await JSZip.loadAsync(file,{checkCRC32:false});
-        const entries=Object.values(zip.files).filter(a=>!a.dir&&!a.name.startsWith('__MACOSX/')&&!a.name.split('/').pop()?.startsWith('.'));
+        const entries=Object.values(zip.files).filter(a=>!a.dir&&!a.name.startsWith('__MACOSX/')&&!a.name.split('/').pop()?.startsWith('.'));if(entries.length>2500)throw new Error('ZIP内のファイル数が2500を超えているため、素材ZIPを分割して読み込んでね。');const expandedTotal=entries.reduce((sum,a)=>sum+(((a as any)._data?.uncompressedSize)||0),0);if(expandedTotal>350*1024*1024)throw new Error('ZIP展開後の合計が350MBを超えるため停止したよ。素材ZIPを分割してね。');
         const models=entries.filter(a=>/\.(glb|gltf)$/i.test(a.name));
         if(!models.length)throw new Error('ZIP内にGLB/glTFモデルが見つからなかったよ。');
         zipArchive=zip;
-        zipCatalog=entries.map(a=>{const name=a.name.split('/').pop()||a.name;const isModel=/\.(glb|gltf)$/i.test(a.name);const kind=classifyAsset(a.name);return{path:a.name,name,kind,selected:isModel&&['character','building','nature','prop'].includes(kind),loaded:false,zipPath:a.name,isModel};});
+        zipCatalog=entries.map(a=>{const name=a.name.split('/').pop()||a.name;const isModel=/\.(glb|gltf)$/i.test(a.name);const kind=classifyAsset(a.name);return{path:a.name,name,kind,selected:isModel,loaded:false,zipPath:a.name,isModel};});
         renderCatalog();
         $('#asset-status').textContent='ZIPカタログ作成完了：モデル '+models.length+'件。';
         message.textContent='必要なモデルを選んで読み込んでね。';
