@@ -154,12 +154,12 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
         message.textContent = 'ZIP内のモデルを検索しているよ。';
         const zip = await JSZip.loadAsync(file, { checkCRC32: true });
         const entries = Object.values(zip.files).filter(item => !item.dir && !item.name.startsWith('__MACOSX/') && !item.name.split('/').pop()?.startsWith('.'));
-        const modelEntries = entries.filter(item => /\\.(glb|gltf)$/i.test(item.name));
+        const modelEntries = entries.filter(item => /\.(glb|gltf)$/i.test(item.name));
         if (!modelEntries.length) throw new Error('ZIP内にGLB/glTFモデルが見つからなかったよ。');
         const resourceBlobs = new Map<string, Blob>();
         const storedResources: { path: string; blob: Blob }[] = [];
         for (const entry of entries) {
-          if (/\\.(glb|gltf)$/i.test(entry.name)) continue;
+          if (/\.(glb|gltf)$/i.test(entry.name)) continue;
           const blob = await entry.async('blob');
           storedResources.push({ path: entry.name, blob });
           resourceBlobs.set(entry.name, blob);
@@ -178,14 +178,29 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
             const modelFile = new File([bytes], name, { type: name.toLowerCase().endsWith('.glb') ? 'model/gltf-binary' : 'model/gltf+json' });
             const modelResources = new Map<string, Blob>();
             const folder = entry.name.includes('/') ? entry.name.slice(0, entry.name.lastIndexOf('/') + 1) : '';
-            for (const resourceEntry of entries) {
-              if (/\\.(glb|gltf)$/i.test(resourceEntry.name)) continue;
+            // Resolve external glTF resources from the model's own directory first,
+            // avoiding same-name textures from unrelated folders in large ZIP packs.
+            const related = entries.filter(resourceEntry =>
+              !/\.(glb|gltf)$/i.test(resourceEntry.name) &&
+              folder && resourceEntry.name.startsWith(folder)
+            );
+            for (const resourceEntry of related) {
               const blob = resourceBlobs.get(resourceEntry.name);
               if (!blob) continue;
               modelResources.set(resourceEntry.name, blob);
-              const tail = resourceEntry.name.split('/').pop();
+              const relative = resourceEntry.name.slice(folder.length);
+              modelResources.set(relative, blob);
+              const tail = relative.split('/').pop();
               if (tail) modelResources.set(tail, blob);
-              if (folder && resourceEntry.name.startsWith(folder)) modelResources.set(resourceEntry.name.slice(folder.length), blob);
+            }
+            // Fallback resources outside the model folder only when their basename
+            // hasn't already been resolved locally.
+            for (const resourceEntry of entries) {
+              if (/\.(glb|gltf)$/i.test(resourceEntry.name)) continue;
+              const blob = resourceBlobs.get(resourceEntry.name);
+              if (!blob) continue;
+              const tail = resourceEntry.name.split('/').pop();
+              if (tail && !modelResources.has(tail)) modelResources.set(tail, blob);
             }
             await studio.loadModel(modelFile, modelResources, category);
             modelFiles.push({ name: modelFile.name, data: bytes, resources: storedResources, category, position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 });
