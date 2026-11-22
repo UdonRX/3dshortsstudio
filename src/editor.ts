@@ -172,7 +172,7 @@ export function mountEditor(root: HTMLElement, studio: StudioController): () => 
         renderCatalog();
         $('#asset-status').textContent='ZIPカタログ作成完了：モデル '+models.length+'件。';
         message.textContent='必要なモデルを選んで読み込んでね。';
-      }      } else {
+      } else {
         const bytes = await file.arrayBuffer();
         await studio.loadModel(file, undefined, category);
         modelFiles.push({ name: file.name, data: bytes, category, position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 });
